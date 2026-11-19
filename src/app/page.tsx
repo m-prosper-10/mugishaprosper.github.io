@@ -1,19 +1,24 @@
+import Header from "@/components/Header";
 import Hero from "@/components/sections/Hero";
 import Projects from "@/components/sections/Projects";
 import Blogs from "@/components/sections/Blogs";
 import Footer from "@/components/sections/Footer";
-import { getFeaturedBlogs } from "@/lib/blogs";
+import { getAllBlogs } from "@/lib/blogs";
 
 export default function Home() {
-  const featuredBlogs = getFeaturedBlogs(3);
+  const allBlogs = getAllBlogs();
+  const featuredBlogs = allBlogs.slice(0, 4);
 
   return (
     <div className="min-h-screen flex flex-col justify-between">
-      <main>
-        <Hero />
-        <Projects />
-        <Blogs posts={featuredBlogs} />
-      </main>
+      <div>
+        <Header />
+        <main>
+          <Hero />
+          <Projects />
+          <Blogs posts={featuredBlogs} totalCount={allBlogs.length} />
+        </main>
+      </div>
       <Footer />
     </div>
   );
