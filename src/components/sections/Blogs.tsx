@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ArrowRight, Clock, FileText } from "lucide-react";
 import { motion } from "framer-motion";
 import type { BlogPostMeta } from "@/lib/blogs";
 
@@ -24,15 +25,20 @@ export default function Blogs({
         viewport={{ once: true }}
         className="space-y-8"
       >
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-[11px] font-bold uppercase tracking-[0.28em] text-muted-foreground/60">
-            Recent Writing
+        <div className="flex items-center justify-between">
+          <h2 className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.28em] text-muted-foreground/60">
+            <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Recent Writing</span>
           </h2>
           <Link
             href="/blogs"
-            className="text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors group"
           >
-            All Articles {totalCount ? `(${totalCount})` : ""} →
+            <span>All Articles {totalCount ? `(${totalCount})` : ""}</span>
+            <ArrowRight
+              className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-foreground group-hover:translate-x-0.5 transition-all"
+              aria-hidden="true"
+            />
           </Link>
         </div>
 
@@ -53,8 +59,9 @@ export default function Blogs({
                       <h3 className="text-lg sm:text-xl font-bold text-foreground group-hover:underline decoration-1 underline-offset-6 transition-colors leading-snug">
                         {post.title}
                       </h3>
-                      <span className="hidden sm:inline-block text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground/50 shrink-0">
-                        {post.readingTime}
+                      <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground/50 shrink-0">
+                        <Clock className="h-3 w-3" aria-hidden="true" />
+                        <span>{post.readingTime}</span>
                       </span>
                     </div>
 
@@ -76,9 +83,13 @@ export default function Blogs({
           </p>
           <Link
             href="/blogs"
-            className="text-xs font-bold uppercase tracking-[0.2em] text-foreground hover:underline underline-offset-6 shrink-0 ml-4"
+            className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.2em] text-foreground hover:underline underline-offset-6 shrink-0 ml-4 group"
           >
-            Browse Archive →
+            <span>Browse Archive</span>
+            <ArrowRight
+              className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform"
+              aria-hidden="true"
+            />
           </Link>
         </div>
       </motion.div>
