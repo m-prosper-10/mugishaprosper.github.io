@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { contactInfo } from "@/lib/data";
 
 export default function Footer() {
@@ -13,7 +14,13 @@ export default function Footer() {
           <span>Mugisha Prosper</span>
         </div>
         
-        <div className="flex gap-8">
+        <div className="flex flex-wrap gap-8">
+          <Link
+            href="/blogs"
+            className="hover:text-foreground/50 transition-colors"
+          >
+            Blogs
+          </Link>
           <a 
             href={contactInfo.github} 
             target="_blank" 

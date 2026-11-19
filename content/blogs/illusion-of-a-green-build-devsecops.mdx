@@ -1,0 +1,81 @@
+---
+title: "The Illusion of a Green Build: What Implementing DevSecOps Taught Me"
+date: "2025-03-08"
+summary: "Why passing unit tests doesn't mean a build is safe to ship, and how I wired dependency auditing, container scanning, and least-privilege permissions into CI."
+tags:
+  - "DevSecOps"
+  - "Cybersecurity"
+  - "CI/CD"
+published: true
+---
+
+Once I got my GitHub Actions pipeline running late last year, I felt pretty proud of that little green checkmark next to my commits. To me, a green build meant: *"The code compiles, the linter is happy, and the app is safe to deploy."*
+
+Then in February, I ran a security scanner across one of my containerized backend services for the first time as part of a DevSecOps deep dive.
+
+My "clean, green" build came back with:
+- **14 high-severity vulnerabilities** sitting inside OS packages in the base Docker image and transitive `npm` dependencies.
+- A container process running as **`uid=0 (root)`** with full write access to the container filesystem.
+- A GitHub Actions workflow token that had **read/write permissions to the entire repository** by default, even on pull-request checks.
+
+That was the week I realized that standard CI checks only ask *"Does it work?"* DevSecOps is about teaching the pipeline to also ask *"What happens if someone tries to abuse this?"*—automatically, on every commit, without slowing development down to a crawl.
+
+---
+
+## Lesson 1: Alert Fatigue Will Kill Your Security Pipeline on Day One
+
+My first attempt at adding Trivy (a container and filesystem vulnerability scanner) to my GitHub Actions workflow was a disaster. I configured it to fail the build on any detected vulnerability (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`).
+
+The build immediately failed with 118 warnings—95% of which were `LOW` or `MEDIUM` CVEs in deep Debian system libraries (like `libsqlite3` or `perl-base`) that my Node.js application never even called, and for which Debian hadn't released an upstream patch yet.
+
+When a security check blocks a deployment over 100 unfixable warnings, you know what every human developer does? They add `continue-on-error: true` or disable the check "temporarily" so they can ship their feature, and they never turn it back on.
+
+To make automated security checks actually stick, I had to apply two rules:
+
+1. **Use minimal base images (`alpine` or `distroless`):** Switching from a full Debian base image to a stripped-down image eliminated over 80% of the OS-level CVE noise overnight because `curl`, `perl`, and compiler toolchains simply weren't installed inside the container anymore.
+2. **Gate the build only on actionable, high-risk findings:** Configure the CI gate to fail hard on **`CRITICAL` and `HIGH` vulnerabilities that actually have a fixed version available** (`--ignore-unfixed`), while logging unfixed or medium issues into a weekly review report.
+
+```yaml
+- name: Scan Docker image for actionable High/Critical CVEs
+  uses: aquasecurity/trivy-action@master
+  with:
+    image-ref: "my-service:${{ github.sha }}"
+    format: "table"
+    exit-code: "1"
+    ignore-unfixed: true
+    severity: "CRITICAL,HIGH"
+```
+
+---
+
+## Lesson 2: Stop Running Containers as `root`
+
+By default, if you don't specify a `USER` instruction in your `Dockerfile`, the process inside your container runs as `root`.
+
+People often shrug this off: *"It's just root inside an isolated container, not root on the host server."* Mostly true—until there is a container runtime vulnerability, a misconfigured volume mount from the host filesystem, or a remote code execution bug in an image-processing library that lets an attacker install binaries and pivot across your internal Docker network.
+
+Adding four lines to a `Dockerfile` drops root privileges and makes the runtime filesystem read-only everywhere except `/tmp`:
+
+```dockerfile
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+WORKDIR /app
+COPY --chown=appuser:appgroup --from=builder /app/dist ./dist
+USER appuser
+```
+
+Now, even if an attacker finds an application bug that lets them execute a shell command inside the process, they can't install packages, can't modify the application code on disk, and can't read root-owned files.
+
+---
+
+## Lesson 3: Lock Down Your CI Pipeline's Own Permissions
+
+The last thing I learned is that **your CI pipeline itself is a high-value attack target**. If you run third-party GitHub Actions pinned to a mutable tag like `@main` or `@v1` instead of a specific version or commit SHA, and you leave the default `GITHUB_TOKEN` with broad write access, a compromised upstream Action can push malicious code straight into your repository or steal your deployment secrets.
+
+Adding a top-level `permissions` block at the top of every workflow file forces default-deny least privilege:
+
+```yaml
+permissions:
+  contents: read
+```
+
+Security that relies on a human remembering to run an audit once a quarter never happens. Security that runs in twenty seconds inside `git push`—and only yells when there is a real, fixable problem—becomes invisible muscle memory.

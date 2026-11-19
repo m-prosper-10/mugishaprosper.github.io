@@ -1,0 +1,72 @@
+---
+title: "I Accidentally Pushed an API Key to GitHub. It Took Bots 4 Minutes."
+date: "2024-05-22"
+summary: "Why deleting a secret in a new commit does nothing, how automated scanners watch public repos in real time, and how I finally cleaned up my workflow."
+tags:
+  - "Cybersecurity"
+  - "Git"
+  - "Backend Engineering"
+published: true
+---
+
+It happened at 1:15 AM on a Tuesday. I was trying to debug why a third-party mail and cloud storage integration wasn't working in my script, so out of laziness I pasted the live secret key directly into a config file to rule out an environment variable bug.
+
+It worked. I celebrated, ran `git add .`, committed with `"fix config"`, and pushed to my public GitHub repository.
+
+Thirty seconds later, while looking at the commit diff on GitHub, my stomach dropped. The key was sitting right there on line 14 in bright green text.
+
+I panicked, deleted the key from the file, replaced it with `process.env.API_KEY`, committed `"remove test"`, and pushed again. Total time exposed on the `main` branch: maybe three or four minutes. I closed my laptop and went to sleep thinking I had dodged a bullet because nobody visits my repos at 1:00 AM anyway.
+
+When I woke up the next morning, I had three automated security alert emails and a suspended account notice. Automated bots had scraped the public GitHub Events firehose, pulled my first commit before my second commit even landed, and tried to spin up workloads with my key.
+
+---
+
+## Commit `B` Does Not Erase Commit `A`
+
+That morning taught me two lessons about Git and security that I wish someone had drilled into me on day one.
+
+First, **nobody needs to visit your profile page to find a leaked key.** Every public `git push` on GitHub appears in a public event stream within seconds. Thousands of automated scrapers monitor that stream 24/7 scanning diffs for regex patterns that look like AWS keys, OpenAI keys, Stripe secrets, or database URLs. If a key hits a public remote for five seconds, you have to assume it is already compromised.
+
+Second, **making a new commit that deletes a line does not remove it from Git.** Git is an append-only history of snapshots. Anyone—human or bot—can run `git log -p` and see every single character you deleted in the previous commit.
+
+Even if you rewrite history with `git reset --hard HEAD~1` and `git push --force`, the old commit hash can still exist as an unreferenced "dangling commit" on GitHub's servers if someone knows the SHA from the public event log.
+
+---
+
+## The Only Real Fix When a Secret Leaks
+
+I spent an hour reading Stack Overflow answers about `git filter-branch` and `git-filter-repo` trying to scrub the commit history before I realized I was solving the wrong problem first.
+
+When you leak a credential, the order of operations is always:
+
+1. **Revoke and rotate the key immediately in the provider dashboard.** Once the key is deactivated at the source, the leaked string in your Git history becomes a useless piece of random text.
+2. **Check the provider's audit logs** to see what requests were made between the moment you pushed and the moment you revoked it.
+3. **Only then clean up your Git history** so automated scanners stop flagging your repository.
+
+---
+
+## Stop Relying on Willpower at 1:00 AM
+
+The biggest takeaway for me wasn't "be more careful next time." Nobody is careful at 1:00 AM when a bug has been fighting them for three hours. If your security relies on you never typing `git add .` while tired, you are eventually going to leak something again.
+
+Instead of trusting my own memory, I set up two guardrails on my machine that same day:
+
+### 1. A Global `.gitignore` and Strict `.env` Habits
+I stopped using `git add .` blindly and trained my fingers to run `git status` and `git add -p` (patch mode), which forces you to look at every hunk of code before staging it.
+
+### 2. A Local Pre-Commit Hook With `gitleaks`
+I installed `gitleaks` and wired a tiny `.git/hooks/pre-commit` script so Git itself refuses to create a commit if it detects anything shaped like a private key, token, or password in the staged diff:
+
+```bash
+#!/usr/bin/env sh
+# .git/hooks/pre-commit
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --verbose --redact
+  if [ $? -ne 0 ]; then
+    echo "Commit blocked: potential secret detected in staged changes."
+    exit 1
+  fi
+fi
+```
+
+Two weeks after adding that hook, it caught me trying to commit a local test `.env.backup` file I had forgotten was in the folder. It cost ten minutes to set up once, and it already paid for itself.

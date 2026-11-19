@@ -1,0 +1,74 @@
+---
+title: "Everything I Thought I Knew About JWT Authentication Was Half Wrong"
+date: "2024-04-06"
+summary: "Why copy-pasting a stateless JWT tutorial into my app left me with no way to log users out, and why boring server sessions still exist."
+tags:
+  - "Backend Engineering"
+  - "Authentication"
+  - "Security"
+published: true
+---
+
+If you search for how to build authentication in Node.js or Python, nine out of ten tutorials will tell you the exact same story: sessions are old and don't scale; JSON Web Tokens (JWTs) are modern, stateless, and effortless. You sign a token with a secret, send it to the frontend, store it in `localStorage`, and attach it to an `Authorization: Bearer` header. Done.
+
+That is how I built authentication for my last three projects. It worked, so I assumed I understood auth.
+
+Then two weeks ago I needed to build a simple feature: a **"Log out of all devices"** button after a user changes their password.
+
+I sat at my desk for twenty minutes before it clicked. I couldn't do it.
+
+---
+
+## The Catch With "Stateless"
+
+The whole selling point of a JWT is that the server doesn't store anything in a database. When a request comes in, the backend just verifies the cryptographic signature and checks the `exp` timestamp. If the signature is valid and the token hasn't expired, the user is let in.
+
+Because I wanted users to stay logged in for a week without being annoyed, I had set the token expiration to `7d`:
+
+```typescript
+const token = jwt.sign(
+  { userId: user.id, role: user.role },
+  process.env.JWT_SECRET!,
+  { expiresIn: "7d" }
+);
+```
+
+When you click "Log out" in a simple JWT tutorial app, all the frontend does is `localStorage.removeItem("token")`.
+
+The token itself isn't dead. If someone copied that token five minutes ago—or if it's still sitting on a laptop at a library—that token will remain completely valid for the next six days and twenty-three hours. Even if the user changes their password, even if an admin bans their account in the database, a purely stateless middleware that only checks the JWT signature will keep letting them in until the seven days run out.
+
+---
+
+## Reinventing Sessions the Hard Way
+
+My first instinct to fix this was: *"Okay, I'll create a `revoked_tokens` table in the database, and on every request my auth middleware will query that table to make sure the token isn't blacklisted."*
+
+Halfway through writing the migration, I stopped and laughed at myself.
+
+Wait. If I am hitting the database on every single authenticated request to check whether a token is still allowed... what was the point of using a stateless JWT in the first place? I had just reinvented regular database sessions, except with bigger payloads, slower cryptographic verification, and extra complexity.
+
+Even the classic refresh-token + short-lived access-token setup has a trade-off nobody warns beginners about: if your access token lasts 15 minutes, then banning a rogue user still takes up to 15 minutes to actually kick them out unless you check a database or Redis store on every request.
+
+---
+
+## Why Was I Putting Tokens in `localStorage` Anyway?
+
+Around the same time, I fell down a rabbit hole reading about Cross-Site Scripting (XSS) and `HttpOnly` cookies.
+
+Storing tokens in `localStorage` is convenient because in React you can just read `localStorage.getItem("token")` and pass it to `fetch()`. The problem is that *any* JavaScript running on your domain can also read `localStorage`. If you make a single mistake rendering user input, or if one npm package on your frontend gets compromised, a three-line script can read the token and send it to an external server.
+
+An `HttpOnly; Secure; SameSite=Lax` cookie, on the other hand, cannot be read by `document.cookie` at all. The browser attaches it automatically, and client-side JavaScript doesn't even know the raw token string exists.
+
+---
+
+## What Changed my Mind
+
+I think beginners (myself included) get seduced by architectures designed for companies with fifty microservices and ten million concurrent users. If you are Google and your login service needs to issue credentials verified by thirty different internal services without hitting a single central user table, short-lived signed JWTs make total sense.
+
+For a single backend API talking to a single PostgreSQL database? A random session ID stored in an `HttpOnly` cookie and looked up in a fast indexed `sessions` table (or Redis) is:
+
+1. **Instantly revocable:** Delete the row from the `sessions` table and the user is logged out everywhere on their very next click.
+2. **Smaller on the wire:** A 32-byte session ID is tiny compared to a base64-encoded JWT stuffed with claims.
+3. **Easier to reason about:** You can actually query your database and show a user: *"You are currently logged in on Chrome on Linux and Safari on iPhone."*
+
+I'm not saying I'll never use JWTs again. They are great for short-lived service-to-service handshakes or one-time email verification links. But for normal user login state, I stopped treating "stateless" like a badge of honor when state is the exact thing I need.
