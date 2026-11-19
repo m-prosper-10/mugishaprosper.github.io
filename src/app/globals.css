@@ -68,10 +68,10 @@
 
 @layer utilities {
   .container-minimal {
-    @apply max-w-162.5 mx-auto px-6 py-24 sm:py-32;
+    @apply w-full max-w-2xl mx-auto px-6 sm:px-8;
   }
 
   .text-cold {
-    @apply tracking-[-0.03em] leading-[1.1];
+    @apply tracking-[-0.035em] leading-[1.08];
   }
 }
