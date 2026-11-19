@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ArrowLeft, ArrowRight, Calendar, Clock } from "lucide-react";
 import Header from "@/components/Header";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 import Footer from "@/components/sections/Footer";
@@ -72,18 +73,27 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
           <div className="mb-8">
             <Link
               href="/blogs"
-              className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors"
+              className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors group"
             >
-              <span>←</span>
+              <ArrowLeft
+                className="h-3.5 w-3.5 group-hover:-translate-x-0.5 transition-transform"
+                aria-hidden="true"
+              />
               <span>All Writing</span>
             </Link>
           </div>
 
           <header className="space-y-6 pb-10 mb-10 border-b border-border/70">
             <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground/70">
-              <time dateTime={post.date}>{post.formattedDate}</time>
+              <span className="inline-flex items-center gap-1.5">
+                <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
+                <time dateTime={post.date}>{post.formattedDate}</time>
+              </span>
               <span>·</span>
-              <span>{post.readingTime}</span>
+              <span className="inline-flex items-center gap-1.5">
+                <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{post.readingTime}</span>
+              </span>
             </div>
 
             <h1 className="text-3xl sm:text-5xl font-bold text-cold">
@@ -122,8 +132,12 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
                   href={`/blogs/${olderPost.slug}`}
                   className="group block space-y-1.5 p-4 border border-border/60 hover:border-foreground/40 transition-colors"
                 >
-                  <span className="text-[10px] font-mono font-bold uppercase tracking-[0.2em] text-muted-foreground/60">
-                    ← Previous Article
+                  <span className="inline-flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-[0.2em] text-muted-foreground/60">
+                    <ArrowLeft
+                      className="h-3 w-3 group-hover:-translate-x-0.5 transition-transform"
+                      aria-hidden="true"
+                    />
+                    <span>Previous Article</span>
                   </span>
                   <p className="text-sm sm:text-base font-bold text-foreground group-hover:underline decoration-1 underline-offset-4 line-clamp-2">
                     {olderPost.title}
@@ -138,8 +152,12 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
                   href={`/blogs/${newerPost.slug}`}
                   className="group block space-y-1.5 p-4 border border-border/60 hover:border-foreground/40 transition-colors sm:text-right"
                 >
-                  <span className="text-[10px] font-mono font-bold uppercase tracking-[0.2em] text-muted-foreground/60">
-                    Next Article →
+                  <span className="inline-flex items-center sm:justify-end gap-1.5 text-[10px] font-mono font-bold uppercase tracking-[0.2em] text-muted-foreground/60">
+                    <span>Next Article</span>
+                    <ArrowRight
+                      className="h-3 w-3 group-hover:translate-x-0.5 transition-transform"
+                      aria-hidden="true"
+                    />
                   </span>
                   <p className="text-sm sm:text-base font-bold text-foreground group-hover:underline decoration-1 underline-offset-4 line-clamp-2">
                     {newerPost.title}
