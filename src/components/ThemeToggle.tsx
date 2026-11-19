@@ -10,12 +10,12 @@ export default function ThemeToggle() {
     <button
       type="button"
       onClick={toggleTheme}
-      className="p-2 transition-opacity opacity-60 hover:opacity-100"
+      className="p-1.5 -mr-1.5 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
       aria-label="Toggle theme"
     >
-      <span className="block h-4 w-4" aria-hidden="true">
-        <Sun className="h-4 w-4 dark:hidden" />
-        <Moon className="hidden h-4 w-4 dark:block" />
+      <span className="block h-3.5 w-3.5" aria-hidden="true">
+        <Sun className="h-3.5 w-3.5 dark:hidden" />
+        <Moon className="hidden h-3.5 w-3.5 dark:block" />
       </span>
     </button>
   );
