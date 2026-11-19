@@ -1,5 +1,6 @@
 "use client";
 
+import { ArrowUpRight, Code2, ExternalLink, FolderGit2 } from "lucide-react";
 import { contactInfo, projects } from "@/lib/data";
 import { motion } from "framer-motion";
 
@@ -13,17 +14,22 @@ export default function Projects() {
         viewport={{ once: true }}
         className="space-y-8"
       >
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-[11px] font-bold uppercase tracking-[0.28em] text-muted-foreground/60">
-            Selected Projects
+        <div className="flex items-center justify-between">
+          <h2 className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.28em] text-muted-foreground/60">
+            <FolderGit2 className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Selected Projects</span>
           </h2>
           <a
             href={contactInfo.github}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors group"
           >
-            GitHub Archive ↗
+            <span>GitHub Archive</span>
+            <ArrowUpRight
+              className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-foreground group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all"
+              aria-hidden="true"
+            />
           </a>
         </div>
 
@@ -59,13 +65,15 @@ export default function Projects() {
                   target="_blank"
                   rel="noopener noreferrer"
                   aria-label={`Open ${project.name}`}
-                  className="text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground/50 group-hover:text-foreground transition-colors shrink-0"
+                  className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground/50 group-hover:text-foreground transition-colors shrink-0"
                 >
-                  Live ↗
+                  <span>Live</span>
+                  <ExternalLink className="h-3 w-3" aria-hidden="true" />
                 </a>
               ) : (
-                <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/35 shrink-0">
-                  In Dev
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/35 shrink-0">
+                  <Code2 className="h-3 w-3" aria-hidden="true" />
+                  <span>In Dev</span>
                 </span>
               )}
             </li>
