@@ -1,0 +1,97 @@
+---
+title: "Stop Treating Git Like a Google Drive Save Button"
+date: "2024-08-29"
+summary: "How breaking a group branch forced me to unlearn 'git add . && git commit -m fix' and actually understand what commits, rebasing, and reflog do."
+tags:
+  - "Git"
+  - "Software Engineering"
+  - "Workflow"
+published: true
+---
+
+For the first year I used Git, I only knew four commands:
+
+```bash
+git pull
+git add .
+git commit -m "update"
+git push
+```
+
+If Git ever printed a wall of text about a merge conflict or a detached `HEAD`, my heart rate went up. If I was working alone, I would literally copy my changed files to my Desktop, delete the repo folder, clone it fresh from GitHub, paste my files back in, and push.
+
+That survival strategy worked fine until I joined a three-person team project this month. Within four days, our commit history looked like a crime scene:
+
+```text
+f82a19c fix
+91b0e4d fix2
+3c71a02 merge branch 'main' of github.com...
+a41e88b working now i think
+120f99a revert fix2
+```
+
+When a bug broke our login flow on Thursday night, nobody could figure out which commit introduced it because every commit touched fifteen unrelated files and had a message like `"updates"`.
+
+Spending a weekend learning how Git actually works under the hood took away 90% of my anxiety. Here are the mental shifts that finally made Git click for me.
+
+---
+
+## 1. A Commit Is a Logical Unit of Change, Not a Timestamp
+
+I used to commit whenever I was about to close my laptop—which meant one commit might contain half of a new API route, a CSS margin fix on the footer, a renamed database column, and three `console.log("HERE 123")` statements I forgot to delete.
+
+If you later discover the database column rename broke something, you cannot revert that commit without also losing your API route and your CSS fix.
+
+The command that changed my life is `git add -p` (interactive patch staging). Instead of dumping every modified file into one giant commit, `git add -p` steps through your changes chunk by chunk in the terminal and asks: *"Stage this hunk? [y,n,q,a,d,s,e,?]"*
+
+That lets you code freely for two hours, and then slice your work into three clean, atomic commits:
+1. `fix(ui): align footer links on mobile viewports`
+2. `refactor(db): rename user_status column to account_state`
+3. `feat(api): add password reset token endpoint`
+
+Now if commit #2 breaks something, reverting it takes one command and touches nothing else.
+
+---
+
+## 2. You Almost Cannot Lose Committed Work (`git reflog`)
+
+The main reason I was terrified of commands like `git rebase` or `git reset --hard` was the fear that one wrong flag would permanently destroy two days of code.
+
+Then someone showed me `git reflog`.
+
+Even when you run `git reset --hard HEAD~3` and your last three commits vanish from `git log`, Git hasn't actually deleted them. For weeks, Git keeps an internal diary of every single commit hash your `HEAD` pointer has ever visited.
+
+If you mess up a rebase or accidentally hard-reset the wrong branch, you just run:
+
+```bash
+git reflog
+# Output:
+# a1b2c3d HEAD@{0}: reset: moving to HEAD~3
+# 9f8e7d6 HEAD@{1}: commit: feat: finish payment webhook handler
+```
+
+And then jump right back to where you were before the mistake:
+
+```bash
+git reset --hard 9f8e7d6
+```
+
+Knowing `git reflog` exists is like discovering there is a safety net under a high wire. Once you know you can't easily fall to your death, you stops being afraid to use the real tools.
+
+---
+
+## 3. Finding Bugs Automatically With `git bisect`
+
+Once we started writing small, focused commits that actually compiled at every step, I got to use `git bisect` for the first time.
+
+We had a bug that we knew wasn't happening three days ago (40 commits back), but we had no idea who caused it. Instead of reading 40 diffs by eye, I ran:
+
+```bash
+git bisect start
+git bisect bad HEAD
+git bisect good 4e91a0c
+```
+
+Git automatically binary-searched the commit history—checking out the middle commit, asking me if the bug was present (`git bisect good` or `git bisect bad`), cutting the search space in half each time—and pinpointed the exact offending 12-line commit in six tries (less than two minutes).
+
+Git isn't a backup folder. It's a time machine for your codebase—if you give it a history worth traveling through.
