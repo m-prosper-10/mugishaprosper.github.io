@@ -1,0 +1,74 @@
+---
+title: "Why Your AI App Works for Three Prompts and Breaks on the Twentieth"
+date: "2026-03-11"
+summary: "What building an AI tutor taught me about 'lost in the middle' context degradation, and why a 128k context window is not a substitute for memory architecture."
+tags:
+  - "AI Engineering"
+  - "LLMs"
+  - "Context Engineering"
+published: true
+---
+
+When model providers started announcing 128,000-token and 1,000,000-token context windows, a lot of people declared that Retrieval-Augmented Generation (RAG) and memory management were dead. *"Why bother chunking or summarizing? Just dump the entire textbook and the entire chat history into the prompt!"*
+
+While working on long-horizon tutoring sessions in **Uwera**, I tested that claim against real student interactions.
+
+On Turn 2, when the context window held 3,000 tokens, the assistant was sharp: it followed every pedagogical constraint in our system prompt, never gave away direct exam answers, and guided the student step by step.
+
+By Turn 22, when the accumulated context hit 38,000 tokens, the exact same model with the exact same system prompt started breaking rules left and right. It forgot the student's grade level established on Turn 1, contradicted a definition it had given on Turn 8, and ignored negative constraints (`"Never write the full solution code before the student attempts pseudocode"`).
+
+We were well under the 128,000-token technical limit. Why was the model acting like it had amnesia?
+
+---
+
+## Context Length Limit Is Not Effective Attention Capacity
+
+A model's maximum context window only tells you how many tokens you can pass into the API without getting a `400 Bad Request` error. It does **not** tell you how well the transformer's attention mechanism reasons across all those tokens simultaneously.
+
+In practice, long prompts suffer from three well-documented degradation patterns that show up painfully in production:
+
+1. **Lost in the Middle:** Models pay strong attention to tokens at the **very beginning** of the prompt (primacy bias) and the **very end** of the prompt (recency bias). Facts buried in the middle 50% of a 40,000-token prompt experience a sharp drop in recall accuracy.
+2. **Instruction Dilution:** As thousands of tokens of user back-and-forth and noisy tool outputs accumulate, the relative attention weight given to your 600-token system rules shrinks. The model starts drifting toward the conversational style and assumptions of the recent chat turns.
+3. **Distractor Interference:** If a student made three wrong guesses on Turns 4, 5, and 6, and those wrong guesses are still sitting verbatim in the prompt on Turn 20, the model frequently confuses the student's earlier incorrect statements with established facts!
+
+---
+
+## Designing Context Like an Operating System Manages RAM
+
+Fixing long-session degradation required treating the context window not as an infinite dumping ground, but as **L1 CPU Cache**—small, high-signal, and actively curated before every single inference call.
+
+Here is the three-part context architecture we moved to:
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│ 1. PINNED SYSTEM INVARIANTS (Static Prefix ~800 tokens)  │
+│    Core role, strict output contract, domain rules       │
+├──────────────────────────────────────────────────────────┤
+│ 2. STRUCTURED WORKING MEMORY (~400 tokens, mutated)      │
+│    JSON state: verified facts, current sub-goal,         │
+│    resolved misconceptions, active constraints           │
+├──────────────────────────────────────────────────────────┤
+│ 3. JUST-IN-TIME EVIDENCE (~1,500 tokens, ephemeral)      │
+│    Top-5 reranked chunks retrieved ONLY for this turn    │
+├──────────────────────────────────────────────────────────┤
+│ 4. SLIDING TURN WINDOW + ANCHOR REMINDER (~1,800 tokens) │
+│    Last 4 raw dialogue turns + final guardrail anchor    │
+└──────────────────────────────────────────────────────────┘
+```
+
+Look at what stays constant here: **whether the user is on Turn 3 or Turn 50, the prompt sent to the LLM never exceeds ~4,500 tokens.**
+
+---
+
+## Two Small Tricks That Made a Huge Difference
+
+### 1. Explicit Misconception Pruning
+When a student makes an error on Turn 4 and corrects it on Turn 6, keeping the raw wrong equations from Turn 4 in the prompt forever poisons later reasoning. Instead, when the sliding window moves past Turn 4, our lightweight state extractor compresses that exchange into Working Memory as:
+- `resolvedMisconceptions: ["Confused base case condition in recursion (resolved on Turn 6)"]`
+
+Now the tutor remembers the student struggled with base cases, without keeping 800 tokens of broken code inside the active attention window.
+
+### 2. Recency Anchor Reminders for Critical Guardrails
+Because transformers pay disproportionate attention to the final 200 tokens of the prompt right before generation starts, repeating your single most critical operational constraint as a 2-line system reminder *after* the retrieved evidence and user history dramatically cuts rule violations on long sessions.
+
+A million-token context window is great when you genuinely need to analyze an entire codebase or legal contract in a single pass. For interactive products, smaller, cleaner, ruthlessly curated context beats raw window size every single time.
