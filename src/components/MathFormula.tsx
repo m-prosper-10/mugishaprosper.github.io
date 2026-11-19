@@ -42,14 +42,14 @@ export function MathBlock({ tex }: { tex: string }) {
         if (tryRender()) {
           clearInterval(interval);
         }
-      }, 100);
+      }, 50);
       return () => clearInterval(interval);
     }
   }, [tex]);
 
   return (
     <div className="my-6 py-4 px-5 border border-border bg-muted/40 overflow-x-auto text-foreground text-center">
-      <div ref={ref} className="font-mono text-sm sm:text-base">
+      <div ref={ref} className="text-sm sm:text-base">
         {tex}
       </div>
     </div>
@@ -80,13 +80,13 @@ export function MathInline({ tex }: { tex: string }) {
         if (tryRender()) {
           clearInterval(interval);
         }
-      }, 100);
+      }, 50);
       return () => clearInterval(interval);
     }
   }, [tex]);
 
   return (
-    <span ref={ref} className="font-mono text-[0.92em] text-foreground px-0.5">
+    <span ref={ref} className="text-foreground px-0.5">
       {tex}
     </span>
   );

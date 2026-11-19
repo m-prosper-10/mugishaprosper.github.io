@@ -1,32 +1,123 @@
 import type { ReactNode } from "react";
 import { MathBlock, MathInline } from "@/components/MathFormula";
 
+function tokenizeInline(text: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  let plainStart = 0;
+
+  const flushPlain = (end: number) => {
+    if (end > plainStart) {
+      tokens.push(text.slice(plainStart, end));
+    }
+  };
+
+  while (i < text.length) {
+    // 1. Inline code `...`
+    if (text[i] === "`") {
+      const closeIdx = text.indexOf("`", i + 1);
+      if (closeIdx !== -1) {
+        flushPlain(i);
+        tokens.push(text.slice(i, closeIdx + 1));
+        i = closeIdx + 1;
+        plainStart = i;
+        continue;
+      }
+    }
+
+    // 2. Inline math $...$ (protecting * and [ inside math from markdown parsing)
+    if (text[i] === "$") {
+      const closeIdx = text.indexOf("$", i + 1);
+      if (closeIdx !== -1 && closeIdx > i + 1) {
+        const candidate = text.slice(i + 1, closeIdx);
+        // Only treat as math if it doesn't start/end with spaces like "$4.20 in tokens $"
+        if (!/^\s|\s$/.test(candidate)) {
+          flushPlain(i);
+          tokens.push(text.slice(i, closeIdx + 1));
+          i = closeIdx + 1;
+          plainStart = i;
+          continue;
+        }
+      }
+    }
+
+    // 3. Bold **...** (allowing inner $...$ math that might contain *)
+    if (text.startsWith("**", i)) {
+      let j = i + 2;
+      let foundClose = -1;
+      while (j < text.length) {
+        if (text[j] === "$") {
+          const nextDollar = text.indexOf("$", j + 1);
+          if (nextDollar !== -1) {
+            j = nextDollar + 1;
+            continue;
+          }
+        }
+        if (text.startsWith("**", j)) {
+          foundClose = j;
+          break;
+        }
+        j++;
+      }
+      if (foundClose !== -1 && foundClose > i + 2) {
+        flushPlain(i);
+        tokens.push(text.slice(i, foundClose + 2));
+        i = foundClose + 2;
+        plainStart = i;
+        continue;
+      }
+    }
+
+    // 4. Italic *...* (allowing inner $...$ math that might contain *)
+    if (text[i] === "*") {
+      let j = i + 1;
+      let foundClose = -1;
+      while (j < text.length) {
+        if (text[j] === "$") {
+          const nextDollar = text.indexOf("$", j + 1);
+          if (nextDollar !== -1) {
+            j = nextDollar + 1;
+            continue;
+          }
+        }
+        if (text[j] === "*") {
+          foundClose = j;
+          break;
+        }
+        j++;
+      }
+      if (foundClose !== -1 && foundClose > i + 1) {
+        flushPlain(i);
+        tokens.push(text.slice(i, foundClose + 1));
+        i = foundClose + 1;
+        plainStart = i;
+        continue;
+      }
+    }
+
+    // 5. Link [label](href)
+    if (text[i] === "[") {
+      const linkMatch = text.slice(i).match(/^\[([^\]]+)\]\(([^)]+)\)/);
+      if (linkMatch) {
+        flushPlain(i);
+        tokens.push(linkMatch[0]);
+        i += linkMatch[0].length;
+        plainStart = i;
+        continue;
+      }
+    }
+
+    i++;
+  }
+
+  flushPlain(text.length);
+  return tokens;
+}
+
 function renderInline(text: string): ReactNode[] {
-  const tokens = text.split(
-    /(\$[^$\n]+\$|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g
-  );
+  const tokens = tokenizeInline(text);
 
   return tokens.map((token, idx) => {
-    if (token.startsWith("$") && token.endsWith("$") && token.length > 2) {
-      return <MathInline key={idx} tex={token.slice(1, -1)} />;
-    }
-
-    if (token.startsWith("**") && token.endsWith("**") && token.length > 4) {
-      return (
-        <strong key={idx} className="font-bold text-foreground">
-          {token.slice(2, -2)}
-        </strong>
-      );
-    }
-
-    if (token.startsWith("*") && token.endsWith("*") && token.length > 2) {
-      return (
-        <em key={idx} className="italic">
-          {token.slice(1, -1)}
-        </em>
-      );
-    }
-
     if (token.startsWith("`") && token.endsWith("`") && token.length > 2) {
       return (
         <code
@@ -35,6 +126,26 @@ function renderInline(text: string): ReactNode[] {
         >
           {token.slice(1, -1)}
         </code>
+      );
+    }
+
+    if (token.startsWith("$") && token.endsWith("$") && token.length >= 3) {
+      return <MathInline key={idx} tex={token.slice(1, -1)} />;
+    }
+
+    if (token.startsWith("**") && token.endsWith("**") && token.length > 4) {
+      return (
+        <strong key={idx} className="font-bold text-foreground">
+          {renderInline(token.slice(2, -2))}
+        </strong>
+      );
+    }
+
+    if (token.startsWith("*") && token.endsWith("*") && token.length > 2) {
+      return (
+        <em key={idx} className="italic">
+          {renderInline(token.slice(1, -1))}
+        </em>
       );
     }
 
