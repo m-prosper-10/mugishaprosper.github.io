@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Code2, ExternalLink, FolderGit2 } from "lucide-react";
+import { ArrowUpRight, Check, CircleCheck, CircleCheckBig, Code2, ExternalLink, FolderGit2 } from "lucide-react";
 import { contactInfo, projects } from "@/lib/data";
 import { motion } from "framer-motion";
 
@@ -65,10 +65,9 @@ export default function Projects() {
                   target="_blank"
                   rel="noopener noreferrer"
                   aria-label={`Open ${project.name}`}
-                  className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground/50 group-hover:text-foreground transition-colors shrink-0"
+                  className="inline-flex border bg-green-600 p-0.5 px-1 rounded-md items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-[0.2em] text-foreground group-hover:text-foreground transition-colors shrink-0"
                 >
                   <span>Live</span>
-                  <ExternalLink className="h-3 w-3" aria-hidden="true" />
                 </a>
               ) : (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/35 shrink-0">

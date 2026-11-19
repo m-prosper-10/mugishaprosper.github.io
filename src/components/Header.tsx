@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BookOpen, Compass, Terminal } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
 
 export default function Header() {
@@ -14,9 +15,10 @@ export default function Header() {
       <div className="flex items-center justify-between border-b border-border/70 pb-5">
         <Link
           href="/"
-          className="text-[11px] font-bold uppercase tracking-[0.25em] text-foreground hover:opacity-70 transition-opacity"
+          className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.25em] text-foreground hover:opacity-70 transition-opacity"
         >
-          M. Prosper
+          <Terminal className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+          <span>M. Prosper</span>
         </Link>
 
         <nav
@@ -25,23 +27,25 @@ export default function Header() {
         >
           <Link
             href="/"
-            className={`transition-colors ${
+            className={`inline-flex items-center gap-1.5 transition-colors ${
               isHome
                 ? "text-foreground"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            Index
+            <Compass className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Index</span>
           </Link>
           <Link
             href="/blogs"
-            className={`transition-colors ${
+            className={`inline-flex items-center gap-1.5 transition-colors ${
               isBlogs
                 ? "text-foreground"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            Writing
+            <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Writing</span>
           </Link>
           <span className="h-3 w-px bg-border" aria-hidden="true" />
           <ThemeToggle />
