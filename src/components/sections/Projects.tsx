@@ -1,6 +1,6 @@
 "use client";
 
-import { projects } from "@/lib/data";
+import { contactInfo, projects } from "@/lib/data";
 import { motion } from "framer-motion";
 
 export default function Projects() {
@@ -14,7 +14,7 @@ export default function Projects() {
         className="space-y-6"
       >
         <h2 className="text-[11px] font-bold uppercase tracking-[0.3em] text-muted-foreground/30">
-          Projects
+          My Top 3 Projects
         </h2>
 
         <ol className="space-y-4 text-xl sm:text-2xl leading-relaxed">
@@ -42,7 +42,7 @@ export default function Projects() {
         <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
           Visit my{" "}
           <a
-            href="https://github.com/m-prosper-10"
+            href={contactInfo.github}
             target="_blank"
             rel="noopener noreferrer"
             className="text-foreground font-medium hover:underline decoration-1 underline-offset-8 transition-colors"
