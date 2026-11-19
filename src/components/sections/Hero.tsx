@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import ThemeToggle from "@/components/ThemeToggle";
 import { socialLinks } from "@/lib/data";
 import { motion } from "framer-motion";
@@ -7,7 +8,13 @@ import { motion } from "framer-motion";
 export default function Hero() {
   return (
     <section id="hero" className="container-minimal relative">
-      <div className="absolute top-8 right-6">
+      <div className="absolute top-8 right-6 flex items-center gap-6">
+        <Link
+          href="/blogs"
+          className="text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Blogs
+        </Link>
         <ThemeToggle />
       </div>
 
