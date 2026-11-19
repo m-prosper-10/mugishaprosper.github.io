@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { BookOpen, Compass, Github, Gitlab, Mail } from "lucide-react";
 import { contactInfo } from "@/lib/data";
 
 export default function Footer() {
@@ -18,37 +19,42 @@ export default function Footer() {
         <div className="flex flex-wrap items-center gap-6 sm:gap-8">
           <Link
             href="/"
-            className="hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
           >
-            Index
+            <Compass className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Index</span>
           </Link>
           <Link
             href="/blogs"
-            className="hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
           >
-            Writing
+            <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Writing</span>
           </Link>
           <a
             href={contactInfo.github}
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
           >
-            GitHub
+            <Github className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>GitHub</span>
           </a>
           <a
             href={contactInfo.gitlab}
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
           >
-            GitLab
+            <Gitlab className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>GitLab</span>
           </a>
           <a
             href={`mailto:${contactInfo.email}`}
-            className="hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
           >
-            Mail
+            <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Mail</span>
           </a>
         </div>
       </div>

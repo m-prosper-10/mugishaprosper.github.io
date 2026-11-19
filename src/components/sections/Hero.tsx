@@ -1,7 +1,21 @@
 "use client";
 
+import { Github, Gitlab, Mail } from "lucide-react";
 import { socialLinks } from "@/lib/data";
 import { motion } from "framer-motion";
+
+function getSocialIcon(label: string) {
+  switch (label.toLowerCase()) {
+    case "github":
+      return <Github className="h-3.5 w-3.5" aria-hidden="true" />;
+    case "gitlab":
+      return <Gitlab className="h-3.5 w-3.5" aria-hidden="true" />;
+    case "email":
+      return <Mail className="h-3.5 w-3.5" aria-hidden="true" />;
+    default:
+      return null;
+  }
+}
 
 export default function Hero() {
   return (
@@ -30,10 +44,8 @@ export default function Hero() {
               rel={link.href.startsWith("mailto:") ? undefined : "noopener noreferrer"}
               className="hover:text-foreground transition-colors inline-flex items-center gap-1.5 group"
             >
+              {getSocialIcon(link.label)}
               <span>{link.label}</span>
-              <span className="text-muted-foreground/40 group-hover:text-foreground group-hover:translate-x-0.5 transition-all">
-                ↗
-              </span>
             </a>
           ))}
         </div>
