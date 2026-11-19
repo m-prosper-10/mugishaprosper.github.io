@@ -1,0 +1,63 @@
+---
+title: "The Day a Routine 'npm install' Taught Me About Supply-Chain Security"
+date: "2026-01-17"
+summary: "Why lockfiles, disabled lifecycle scripts, and least-privilege secrets matter when a single compromised transitive dependency can read your environment variables."
+tags:
+  - "DevSecOps"
+  - "Cybersecurity"
+  - "Node.js"
+published: true
+---
+
+In mid-January, a security advisory went out about a popular open-source utility package that had been compromised after a maintainer fell for a phishing domain. The attacker published a patch release (`1.4.2` -> `1.4.3`) containing a `postinstall` script that quietly read `process.env` and `~/.ssh` and exfiltrated them to an external server during `npm install`.
+
+Out of curiosity, I checked how many transitive dependencies were inside one of my mid-sized TypeScript repositories.
+
+My `package.json` listed **18 direct dependencies**.
+My `node_modules` folder contained **742 packages** maintained by hundreds of separate individuals around the world.
+
+And up until that morning, every time I ran `npm install` on my laptop—or inside a CI runner loaded with cloud deployment secrets—any one of those 742 packages had full permission to execute arbitrary shell scripts with the exact same privileges as my user account.
+
+---
+
+## Wait—`npm install` Executes Arbitrary Code by Default?
+
+A lot of developers assume that downloading a package only runs code when you actually `import` it in your application.
+
+That isn't true. Both `npm` and `pip` support lifecycle hooks (`preinstall`, `install`, `postinstall` in `package.json`, or `setup.py` in Python). Those hooks were designed so native C++ add-ons (like `bcrypt` or `sharp`) could compile binaries for your OS right after downloading.
+
+Wait a second and think about the security model of that:
+- Your `.env` file with your development API keys is sitting in the project folder.
+- Your `~/.aws/credentials`, `~/.ssh/id_ed25519`, and Git credentials are sitting in your home directory.
+- Every single package in your dependency tree gets to run a bash or Node script with your OS user permissions the moment you type `npm install`.
+
+If a package has `"version": "^1.4.0"` in your `package.json`, and you run `npm install` instead of `npm ci`, npm happily resolves the newly published `1.4.3` malicious patch release and executes its `postinstall` script before you even open your code editor.
+
+---
+
+## Four Guardrails I Put in Place Immediately
+
+You can't personally audit 700 transitive packages on every commit, and you can't stop writing software. What you *can* do is strip away the blind trust that makes supply-chain attacks effortless.
+
+### 1. Never Use `npm install` in CI; Always Use `npm ci --ignore-scripts`
+First, `npm ci` refuses to resolve floating semver ranges (`^` or `~`); it installs the **exact cryptographic SHA hashes** pinned inside `package-lock.json`. If `package.json` and `package-lock.json` don't match, the build fails immediately.
+
+Second, disabling lifecycle scripts by default (`ignore-scripts=true` in `.npmrc`) stops `postinstall` hooks from running automatically, and you explicitly allowlist only the 1 or 2 native packages (like `esbuild` or `sharp`) that legitimately need a build step.
+
+### 2. Isolate Secrets per CI Job Step
+In my early GitHub Actions files, I used to declare all secrets at the top of the workflow file under a global `env:` block so every step had access to them:
+
+```yaml
+# Bad: Every step (including `npm ci` and linters) can read PROD_DB_URL!
+env:
+  PROD_DB_URL: ${{ secrets.PROD_DB_URL }}
+  DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+```
+
+Why does the `npm ci` or `npm run lint` step need access to `PROD_DB_URL` or `DEPLOY_SSH_KEY`? It doesn't! By scoping secrets **only to the specific deployment step**—and running build/test steps in an environment with zero production secrets—a compromised build dependency finds nothing in `process.env` worth stealing.
+
+### 3. Wait 48 Hours Before Auto-Merging Minor Dependency Bumps
+Most malicious supply-chain releases are detected and pulled from npm or PyPI within 12 to 36 hours of publication. Living on the bleeding edge of automated daily dependency update bots (`Dependabot` auto-merge without a cooldown period) actually turns you into the canary in the coal mine. Grouping non-security dependency updates into a weekly review—after new releases have survived public scrutiny for a few days—costs nothing and avoids 90% of zero-day package compromises.
+
+### 4. Ask "Do I Really Need a Package for 30 Lines of Code?"
+This brought me right back to minimalism. Every dependency you *don't* install is a maintainer account that can never be phished to attack your users.
