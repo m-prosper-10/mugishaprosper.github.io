@@ -1,0 +1,99 @@
+---
+title: "When Redis Goes Down, Does It Take Your Database With It?"
+date: "2025-08-25"
+summary: "How a naive cache-aside pattern turned a brief Redis restart into a full PostgreSQL outage, and what cache stampedes taught me about failure modes."
+tags:
+  - "Systems Engineering"
+  - "Caching"
+  - "Backend Engineering"
+published: true
+---
+
+Everyone learns the same five-line caching pattern when they first add Redis to a backend service:
+
+```typescript
+const cached = await redis.get(cacheKey);
+if (cached) {
+  return JSON.parse(cached);
+}
+
+const freshData = await computeExpensiveDashboardQuery(db);
+await redis.set(cacheKey, JSON.stringify(freshData), "EX", 300);
+return freshData;
+```
+
+It is called **Cache-Aside**. You check Redis first; if the key is there, return it in `1ms`. If the key has expired, run the expensive PostgreSQL aggregation query, store the result in Redis for 5 minutes (`300` seconds), and return it.
+
+Simple, right? It dropped our dashboard load time from `420ms` down to `4ms`.
+
+Then one afternoon I ran a load test to see what would happen right at the moment a popular shared cache key expired while 80 concurrent requests were hitting the dashboard.
+
+PostgreSQL CPU spiked to **100%**, connection pools maxed out, and requests started failing across the entire application—even on routes that had nothing to do with the dashboard.
+
+---
+
+## Anatomy of a Cache Stampede (The Thundering Herd)
+
+Why did a single expired cache key knock over the database?
+
+Suppose `computeExpensiveDashboardQuery(db)` takes `450ms` to run. For five minutes, Redis serves that key instantly. Then, at `t = 300.000s`, the key expires and disappears from Redis.
+
+During the next `450ms` window—while the very first unlucky request is still waiting for PostgreSQL to finish recalculating the query—79 other requests arrive and check `redis.get(cacheKey)`.
+
+All 79 of them get `null`!
+
+So instead of **1** request recalculating the cache and 79 requests waiting for it, **all 80 requests fire the exact same heavy 450ms SQL aggregation against PostgreSQL simultaneously.** Under heavy load, the query takes 3 seconds instead of 450ms, which means even more incoming requests miss the cache and pile onto the database until the database runs out of connections and collapses.
+
+Worse: imagine what happens if your Redis container restarts or drops out for ten seconds. Suddenly your database receives 100% of the raw traffic that Redis was shielding it from, all at once. If your database was sized assuming a 95% cache hit rate, a ten-second Redis blip turns into a thirty-minute database outage.
+
+---
+
+## Two Patterns That Stopped the Stampede
+
+### 1. Single-Flight Request Coalescing (In-Memory Promise Deduplication)
+
+Wait—if Request #1 is already inside the Node.js process waiting for `computeExpensiveDashboardQuery()` to finish for `cacheKey = "global_stats"`, why would Request #2 on the exact same server start a second identical database call?
+
+By keeping a tiny `Map<string, Promise<unknown>>` of currently in-flight cache computations, 100 concurrent requests arriving on the same cache miss share the **single in-flight Promise**:
+
+```typescript
+const inFlightQueries = new Map<string, Promise<unknown>>();
+
+export async function getOrComputeWithCoalescing<T>(
+  key: string,
+  ttlSeconds: number,
+  computeFn: () => Promise<T>
+): Promise<T> {
+  const cached = await redis.get(key);
+  if (cached) return JSON.parse(cached) as T;
+
+  const existingPromise = inFlightQueries.get(key) as Promise<T> | undefined;
+  if (existingPromise) {
+    return existingPromise; // 79 requests piggyback on Request #1!
+  }
+
+  const promise = (async () => {
+    try {
+      const fresh = await computeFn();
+      await redis.set(key, JSON.stringify(fresh), "EX", ttlSeconds);
+      return fresh;
+    } finally {
+      inFlightQueries.delete(key);
+    }
+  })();
+
+  inFlightQueries.set(key, promise);
+  return promise;
+}
+```
+
+With those twenty lines of code, when a hot key expires under 100 concurrent requests, PostgreSQL sees **1 query** instead of 100.
+
+### 2. Stale-While-Revalidate + TTL Jitter
+
+Two other small changes made our caching layer vastly more resilient:
+
+- **Add random jitter to TTLs:** If a cron job pre-warms 500 cache keys at midnight and sets all of their TTLs to exactly `3600` seconds, all 500 keys will expire at the exact same second at 1:00 AM. Adding a random jitter (`3600 + randomInt(-180, 180)`) spreads expirations smoothly across a six-minute window.
+- **Serve slightly stale data while refreshing in the background:** Store a logical `refreshAt` timestamp inside the cached JSON payload alongside a longer physical Redis TTL. When `now > refreshAt`, one background task refreshes the key while users immediately get the existing cached value with zero latency spike.
+
+A cache shouldn't just make your system faster when everything is healthy. It has to be designed so that when a key expires—or a cache node blips—your database barely notices.

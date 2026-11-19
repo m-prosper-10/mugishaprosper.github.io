@@ -27,7 +27,12 @@ export const socialLinks = [
   },
 ] as const;
 
-export const projects = [
+export interface Project {
+  name: string;
+  href?: string;
+}
+
+export const projects: readonly Project[] = [
   {
     name: "NeuroLab",
     href: "https://www.neurolab.cc",
@@ -39,4 +44,4 @@ export const projects = [
   {
     name: "Xether AI",
   },
-] as const;
+];

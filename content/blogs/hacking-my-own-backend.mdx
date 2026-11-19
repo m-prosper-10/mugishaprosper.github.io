@@ -1,0 +1,94 @@
+---
+title: "How I Tried to 'Hack' My Own Backend and Found Embarrassing Holes"
+date: "2024-07-09"
+summary: "Spending a Saturday with Burp Suite against my own API taught me why frontend validation is an illusion and why checking 'isLoggedIn' is not authorization."
+tags:
+  - "Cybersecurity"
+  - "Backend Engineering"
+  - "API Security"
+published: true
+---
+
+For a long time, my definition of a "secure endpoint" was simple: does the route have my `requireAuth` middleware attached to it? If the middleware checked that the user was logged in, I checked that route off my list and moved on.
+
+Last weekend I decided to spend a Saturday afternoon testing my own hobby project using an HTTP intercepting proxy (Burp Suite) and plain `curl`, pretending I was a malicious user who already had a normal, free account.
+
+Within forty-five minutes, I was able to read another user's private notes, change my own account role to `"admin"`, and trigger negative quantity numbers on an order endpoint.
+
+It was slightly humiliating—because I had written every single one of those bugs myself—but it completely changed how I look at backend code.
+
+---
+
+## Bug #1: Confusing Authentication With Authorization (IDOR)
+
+Here is an endpoint I had written to let a user delete one of their saved documents:
+
+```typescript
+// What I wrote:
+app.delete("/api/documents/:id", requireAuth, async (req, res) => {
+  const docId = req.params.id;
+  await db.document.delete({
+    where: { id: docId },
+  });
+  return res.json({ status: "deleted" });
+});
+```
+
+Why did I think this was safe? Because on my React frontend, the "Delete" button only showed up on cards inside the user's own dashboard! If User A only sees User A's cards on the screen, how could they ever click delete on User B's document?
+
+The moment you take the browser UI out of the equation and send a raw `DELETE /api/documents/doc_84920` request in `curl`, the illusion disappears. My `requireAuth` middleware verified *who I was* (Authentication), and then the route handler happily deleted *whatever ID I passed in* without checking whether `document.ownerId === req.user.id` (Authorization).
+
+In security terms, this is called an **Insecure Direct Object Reference (IDOR)**. And the fix is so simple it hurts: never query or mutate a resource by its primary key alone when a user is making the request. Always scope the `WHERE` clause by the authenticated user's ID:
+
+```typescript
+const deleted = await db.document.deleteMany({
+  where: {
+    id: req.params.id,
+    ownerId: req.user.id, // Enforce ownership at the query level
+  },
+});
+
+if (deleted.count === 0) {
+  return res.status(404).json({ error: "Document not found" });
+}
+```
+
+---
+
+## Bug #2: Trusting `req.body` (Mass Assignment)
+
+The second hole I found was on my `"Update Profile"` route. On the frontend form, there were only two text inputs: `name` and `bio`.
+
+On the backend, because I wanted to write concise code, I passed `req.body` straight into the database update call:
+
+```typescript
+// Dangerous shortcut:
+await db.user.update({
+  where: { id: req.user.id },
+  data: req.body,
+});
+```
+
+Using `curl`, I sent a `PATCH` request with `{ "name": "Prosper", "role": "admin", "isVerified": true }`. Because those columns existed on the `users` table in my database schema, the ORM dutifully updated all three fields. I had just promoted myself to administrator in one HTTP request.
+
+---
+
+## Bug #3: "The Frontend Already Validates That"
+
+I used to get annoyed writing validation schemas on the backend when I had already written form validation on the React side. It felt like doing the exact same work twice.
+
+Sitting in front of an HTTP proxy makes it obvious why frontend validation has nothing to do with security. **Frontend validation exists for user experience**—so an honest user gets a fast red message when they mistype their email. **Backend validation exists for security and data integrity**—because anyone can bypass your React app entirely with a ten-word terminal command.
+
+Now, every single route in my backend passes `req.body`, `req.query`, and `req.params` through a strict allowlist schema (like `Zod`) that strips unknown fields before any business logic runs:
+
+```typescript
+const UpdateProfileSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  bio: z.string().trim().max(300).optional(),
+});
+
+// Even if someone sends { "role": "admin" }, Zod strips it out
+const safeInput = UpdateProfileSchema.parse(req.body);
+```
+
+If you have never tried to break your own app with `curl` or an intercepting proxy, do it once. You will never trust `req.body` or a naked `:id` parameter again.

@@ -1,0 +1,97 @@
+---
+title: "The Day My 'Fast' API Fell Over With Twelve Users"
+date: "2024-02-18"
+summary: "How I found out my clean ORM code was secretly running 300 database queries per page load, and why testing on localhost lies to you."
+tags:
+  - "Backend Engineering"
+  - "Databases"
+  - "Node.js"
+published: true
+---
+
+Last week I asked a small group of friends from class to test a project I had been building for a month. On my laptop, every page loaded instantly. The code looked clean. I had separated everything into controllers, services, and repositories the way every tutorial says you should.
+
+About four minutes after I dropped the link in our group chat, someone sent a screenshot of a white screen with a `504 Gateway Timeout`. Then another person said the dashboard spinner had been turning for twenty seconds.
+
+I remember staring at my terminal thinking my hosting provider was having an outage. Surely twelve people clicking around at the same time couldn't take down a Node.js server backed by PostgreSQL.
+
+It turns out twelve people is more than enough when every single page refresh fires 340 separate SQL queries.
+
+---
+
+## Why Localhost Lied to Me
+
+When you test an app on your own machine, two things hide your worst mistakes:
+
+1. Your database only has fifteen rows of dummy data you typed in by hand (`"Test User 1"`, `"asdf"`, `"Sample Post"`).
+2. Your app and your database are talking over `127.0.0.1` with zero network latency.
+
+If you run a loop that queries the database fifty times on `localhost`, each query takes `0.2ms`. Multiply that by fifty and the whole request finishes in `10ms`. It feels instantaneous.
+
+Move that exact same code to a cheap cloud server where the managed database sits in another container three network hops away, and each small query suddenly costs `12ms` of round-trip time. Multiply `12ms` by 300 queries, and a single user loading the home feed blocks a database connection for nearly four seconds. Put twelve users on it at once, exhaust the default pool of ten connections, and the whole thing chokes.
+
+---
+
+## The Loop I Didn't Realize Was a Loop
+
+The worst part was that I didn't even write a `for` loop with a SQL query inside it—at least not directly. I used an ORM and wrote a helper function that looked harmless:
+
+```typescript
+// What I wrote thinking it was "clean and modular"
+const projects = await db.project.findMany({
+  where: { isArchived: false },
+  orderBy: { createdAt: "desc" },
+});
+
+const enrichedProjects = await Promise.all(
+  projects.map(async (project) => {
+    const owner = await db.user.findUnique({ where: { id: project.ownerId } });
+    const taskCount = await db.task.count({ where: { projectId: project.id } });
+    const lastComment = await db.comment.findFirst({
+      where: { projectId: project.id },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return { ...project, owner, taskCount, lastComment };
+  })
+);
+```
+
+I thought using `Promise.all` was the smart, asynchronous JavaScript way to make things fast. Instead of waiting for one query after another, run them all concurrently!
+
+What I didn't understand is that `Promise.all` over 100 items doesn't magically make the database do less work. It just slams the database connection pool with 300 queries at the exact same millisecond. The connection pool queues them up anyway, and half of them time out waiting for a free connection.
+
+---
+
+## Turning Query Logging On Changed How I Write Backend Code
+
+A senior developer I asked for help didn't even look at my TypeScript files first. He just told me to turn on raw SQL query logging in development and reload the page once.
+
+Watching my terminal scroll past hundreds of `SELECT` statements for a single browser refresh was humbling. I had treated the database like an in-memory JavaScript object where property lookups are free.
+
+We rewrote that entire block into a single query with a `LEFT JOIN` and a grouped count, and the response time dropped from `3,800ms` to `28ms`.
+
+```sql
+SELECT
+  p.id,
+  p.title,
+  u.name AS owner_name,
+  COUNT(t.id) AS task_count
+FROM projects p
+JOIN users u ON u.id = p.owner_id
+LEFT JOIN tasks t ON t.project_id = p.id
+WHERE p.is_archived = false
+GROUP BY p.id, u.name
+ORDER BY p.created_at DESC;
+```
+
+---
+
+## What I'm Doing Differently Now
+
+I still use an ORM for simple inserts and lookups because the TypeScript autocomplete saves time. But I changed two habits immediately:
+
+- **I keep SQL query logging turned on in my local terminal.** If I refresh a page once and my terminal scrolls like the Matrix, I know I broke something before it ever reaches a server.
+- **I seed my local database with 10,000 fake rows instead of 10.** It takes a two-minute script to generate dummy users and posts, and it immediately exposes missing indexes and accidental `N+1` queries while I'm still coding.
+
+Clean code isn't just code that looks tidy in tiny functions. If a "clean" helper function hides a network call inside a `.map()`, it's a bug waiting for real traffic.
