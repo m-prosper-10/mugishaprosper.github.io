@@ -1,0 +1,73 @@
+---
+title: "The Week Our LLM Token Bill Tripled (And Users Didn't Even Notice an Improvement)"
+date: "2025-10-05"
+summary: "How stuffing entire conversation histories into frontier models burned our budget, and how tiered model routing and prompt caching cut latency and cost by 70%."
+tags:
+  - "AI Engineering"
+  - "LLMs"
+  - "Systems Engineering"
+published: true
+---
+
+Between August and September, usage on one of our AI assistant workflows grew steadily—maybe 30% more active sessions week over week.
+
+Then at the end of the month I opened the API billing dashboard. Our token spend hadn't grown by 30%. It had **more than tripled**.
+
+My first thought was that someone was abusing an endpoint with an automated script. So I pulled the token telemetry by user session. There was no bot attack. Real users were simply having longer study and debugging sessions—15 to 25 turns instead of 3 turns—and our naive conversation architecture was charging us quadratic token costs for every single message they sent.
+
+Worse, when I looked at user feedback and latency logs, those 20-turn sessions weren't even getting smarter answers. They were getting **slower** (`6.5s` time-to-first-token) and the model was getting confused by contradictory things said twelve messages earlier.
+
+---
+
+## Mistake #1: The Quadratic Cost of Appending Every Turn Forever
+
+When you build a chat interface, the tutorial way to maintain memory is to pass the entire array of past `messages` back to the model on every turn.
+
+Think about what happens to your input token count over a 20-turn session where each turn (user prompt + retrieved context + assistant reply) adds 1,000 tokens:
+
+- **Turn 1:** 1,000 input tokens
+- **Turn 5:** 5,000 input tokens
+- **Turn 10:** 10,000 input tokens
+- **Turn 20:** 20,000 input tokens
+
+By Turn 20, you haven't billed 20,000 tokens total—you have billed `1,000 + 2,000 + ... + 20,000 = 210,000 input tokens` for a single conversation!
+
+And why were we re-sending 8,000 tokens of raw retrieved documentation chunks from Turn 2 when the user on Turn 14 had moved on to a completely different topic?
+
+### The Fix: Ephemeral Evidence + Sliding Window Memory
+
+We split conversation state into two distinct layers:
+
+1. **Retrieved RAG chunks are ephemeral per turn.** The 2,500 tokens of retrieved reference material used to answer Turn 3 are attached *only* to the Turn 3 generation call. Once the assistant produces its cited answer, those raw reference chunks are dropped from future prompt history (only the assistant's concise answer and source IDs remain).
+2. **Rolling state summary + recent raw turns.** Keep the last 4–6 turns verbatim so conversational flow feels natural, and compress older turns into a structured 250-token running state object (`currentGoal`, `establishedFacts`, `openQuestions`).
+
+---
+
+## Mistake #2: Breaking Prefix Prompt Caching With Dynamic Timestamps
+
+Most modern LLM providers automatically discount input tokens by 50% to 90%—and cut prefill latency dramatically—if the beginning of your prompt matches a previously cached token prefix.
+
+When I inspected our raw prompt payloads, our cache hit rate was **`0%`**.
+
+Why? Because on line 2 of our `system` prompt, someone had written:
+
+```text
+You are an AI engineering tutor. Current server timestamp: 2025-10-02T14:22:19.402Z.
+[... 3,500 tokens of static rubric instructions and few-shot examples ...]
+```
+
+Because the millisecond timestamp sat at the **very top** of the system prompt, every single request changed token #12—which invalidated the prefix cache for the remaining 3,500 tokens of static instructions below it!
+
+Moving all static instructions, schemas, and examples to the static prefix at the top—and pushing dynamic per-user or per-turn context (`timestamp`, `userProfile`) to the very end of the prompt—instantly pushed our prompt cache hit rate above **82%**.
+
+---
+
+## Mistake #3: Using a Frontier Reasoning Model to Classify "Hello"
+
+The last realization was almost embarrassing. Every time a user sent a message—even if it was *"Thanks, that makes sense!"* or a simple intent routing check—we were sending it to our largest, slowest, most expensive frontier model.
+
+We introduced a lightweight **two-tier model router**:
+- A fast, cheap small model (`flash` / `mini` tier) handles intent classification, query rewriting for search, and simple conversational acknowledgments in under `350ms` at roughly **1/15th the cost**.
+- The heavy frontier model is invoked *only* when the router classifies the turn as requiring multi-hop reasoning, code synthesis, or complex debugging.
+
+By the middle of October, our average response latency dropped by **45%**, our per-session token cost dropped by **71%**, and user satisfaction scores actually went *up* because the model stopped drowning in twenty turns of stale context.
