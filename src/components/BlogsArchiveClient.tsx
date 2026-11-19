@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, Calendar, Clock, Tag } from "lucide-react";
 import type { BlogPostMeta } from "@/lib/blogs";
 
 type SortMode = "newest" | "oldest";
@@ -70,6 +71,7 @@ export default function BlogsArchiveClient({
       {/* Minimalist Filter & Sort Bar */}
       <div className="py-5 border-b border-border/70 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-1.5">
+          <Tag className="h-3.5 w-3.5 text-muted-foreground/50 mr-1" aria-hidden="true" />
           {mainTopics.map((tag) => {
             const active = selectedTag === tag;
             return (
@@ -92,18 +94,23 @@ export default function BlogsArchiveClient({
         <div className="flex items-center gap-1.5 shrink-0">
           {SORT_OPTIONS.map((option) => {
             const active = sortBy === option.value;
+            const Icon =
+              option.value === "newest"
+                ? ArrowDownWideNarrow
+                : ArrowUpNarrowWide;
             return (
               <button
                 key={option.value}
                 type="button"
                 onClick={() => setSortBy(option.value)}
-                className={`text-[10px] font-mono font-bold uppercase tracking-[0.16em] px-2.5 py-1 border transition-colors cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-[0.16em] px-2.5 py-1 border transition-colors cursor-pointer ${
                   active
                     ? "bg-foreground text-background border-foreground"
                     : "bg-transparent text-muted-foreground border-border/70 hover:text-foreground hover:border-foreground/40"
                 }`}
               >
-                {option.label}
+                <Icon className="h-3 w-3" aria-hidden="true" />
+                <span>{option.label}</span>
               </button>
             );
           })}
@@ -140,8 +147,14 @@ export default function BlogsArchiveClient({
                       className="block space-y-2.5"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground/55">
-                        <time dateTime={post.date}>{post.formattedDate}</time>
-                        <span>{post.readingTime}</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <Calendar className="h-3 w-3" aria-hidden="true" />
+                          <time dateTime={post.date}>{post.formattedDate}</time>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <Clock className="h-3 w-3" aria-hidden="true" />
+                          <span>{post.readingTime}</span>
+                        </span>
                       </div>
 
                       <h3 className="text-xl sm:text-2xl font-bold text-foreground group-hover:underline decoration-1 underline-offset-6 transition-colors leading-snug">
