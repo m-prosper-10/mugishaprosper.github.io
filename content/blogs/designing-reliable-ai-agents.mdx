@@ -1,0 +1,133 @@
+---
+title: "What Production Taught Me About Multi-Agent AI Systems"
+date: "2026-11-10"
+summary: "Personal reflections on why autonomous agent loops fail in the real world, and how constraining topology, state, and evaluation turns fragile demos into dependable software."
+tags:
+  - "AI Engineering"
+  - "Agents"
+  - "Systems Architecture"
+published: true
+---
+
+The first time I built an autonomous multi-agent prototype, it felt like magic. I wired together a planner agent, a researcher agent, and a coding agent, gave them a shared scratchpad, and watched them collaborate in a terminal. For the first three runs, it solved problems I would have spent hours coding manually.
+
+On the fourth run, the planner misunderstood an ambiguous tool error, convinced the researcher to look up an irrelevant API, burned $4.20 in tokens over forty-five seconds, and confidently returned a hallucinated JSON payload that crashed the downstream service.
+
+Working on projects like **NeuroLab**, **Uwera**, and **Xether AI** forced me to confront an uncomfortable truth early on: **most "autonomous agent" architectures are inversely correlated with production reliability.** The more freedom you give an LLM to invent its own control flow at runtime, the harder it becomes to guarantee correctness, latency, and cost.
+
+Here is what actually survived contact with real users after stripping away the hype.
+
+---
+
+## 1. The Compounding Failure Math Nobody Talks About
+
+When you build a traditional deterministic pipeline, reliability is mostly a question of edge-case handling and infrastructure uptime. When you build a multi-step agent loop, reliability is governed by compounding probability.
+
+Suppose a frontier model completes a single reasoning + tool-selection step with **95% accuracy**—which is optimistic once messy user input and real-world API failures enter the picture. Over a trajectory of `N` sequential steps, the probability of a clean end-to-end execution is:
+
+```text
+1 step:   0.95^1  = 95.0%
+5 steps:  0.95^5  = 77.4%
+10 steps: 0.95^10 = 59.9%
+20 steps: 0.95^20 = 35.8%
+```
+
+At 20 autonomous steps, your system fails nearly two-thirds of the time. Worse, LLM failures are rarely loud exceptions. They are **silent semantic drift**: step 4 makes a slightly flawed assumption, step 5 treats that assumption as ground truth, and by step 12 the agent is solving the wrong problem entirely.
+
+> An unconstrained `while (!done)` loop around a language model is not an architecture. It is a slot machine with an API key.
+
+To beat compounding error, you have to stop treating the LLM as the operating system and start treating it as a **bounded functional component** inside a deterministic state machine.
+
+---
+
+## 2. Explicit Graphs Over Open-Ended Conversation Loops
+
+Early on, I tried the popular pattern where multiple agents talk to each other in a group chat until a "supervisor" agent decides the task is complete. In practice, conversational handoffs between agents introduce two fatal problems:
+
+1. **Context pollution:** Every agent pays the token and attention cost of reading the entire back-and-forth history, including failed attempts and verbose intermediate tool outputs.
+2. **Blame diffusion:** When the final answer is wrong, you cannot tell whether the router misclassified the intent, the retriever pulled bad context, or the synthesizer hallucinated.
+
+What replaced it in my own systems is **typed state-graph orchestration**. Agents do not "chat" with one another; they consume a strictly typed input state and emit a validated output struct that drives a deterministic transition function.
+
+```typescript
+export type WorkflowStage =
+  | "CLASSIFY_INTENT"
+  | "RETRIEVE_CONTEXT"
+  | "VERIFY_EVIDENCE"
+  | "SYNTHESIZE_RESPONSE"
+  | "HUMAN_FALLBACK";
+
+export interface ExecutionContext {
+  requestId: string;
+  query: string;
+  retrievedChunks: ReadonlyArray<{ id: string; score: number; text: string }>;
+  verificationPassed: boolean;
+  retryCount: number;
+  tokenBudgetRemaining: number;
+}
+
+export function nextStage(ctx: ExecutionContext, current: WorkflowStage): WorkflowStage {
+  switch (current) {
+    case "CLASSIFY_INTENT":
+      return "RETRIEVE_CONTEXT";
+
+    case "RETRIEVE_CONTEXT":
+      return ctx.retrievedChunks.length > 0 ? "VERIFY_EVIDENCE" : "HUMAN_FALLBACK";
+
+    case "VERIFY_EVIDENCE":
+      if (ctx.verificationPassed) return "SYNTHESIZE_RESPONSE";
+      if (ctx.retryCount < 2 && ctx.tokenBudgetRemaining > 2000) {
+        return "RETRIEVE_CONTEXT";
+      }
+      return "HUMAN_FALLBACK";
+
+    default:
+      return "HUMAN_FALLBACK";
+  }
+}
+```
+
+Notice what happens here:
+- **Loops are bounded in code**, not by asking the model nicely in a system prompt not to retry more than twice.
+- **Token budgets are first-class state.** If an execution is burning too many tokens, the harness terminates or degrades gracefully.
+- **Context is pruned at every boundary.** The synthesis step never sees the raw failed queries from the first retrieval attempt—only the verified evidence chunks.
+
+---
+
+## 3. Tool Design Is Interface Design for Non-Human Users
+
+We spend years learning how to design clean REST APIs and ergonomic CLIs for human developers, then turn around and hand an LLM a raw database schema or a 40-parameter internal microservice endpoint.
+
+Through painful trial and error, I learned that **tool definitions are part of your prompt engineering**:
+
+- **Coarse-grained tools beat fine-grained primitives:** If an agent always needs to call `getUserById`, `getUserPermissions`, and `getRecentActivity` together, do not expose three separate tools. Expose a single `getUserWorkspaceSnapshot(userId)` tool. You eliminate two round-trips of latency and two opportunities for the model to pass malformed arguments.
+- **Return actionable error messages:** When a tool fails, returning `500 Internal Server Error` or a raw stack trace causes the model to hallucinate workarounds. Returning `"Parameter 'startDate' (2026-14-01) is not a valid ISO-8601 date. Expected YYYY-MM-DD."` allows the model to self-correct on the next turn over 90% of the time.
+- **Cap output payloads ruthlessly:** A tool that dumps 50,000 tokens of raw HTML or unpaginated SQL rows into the context window will destroy the model's reasoning ability for the rest of the session. Always truncate, summarize, or paginate at the tool boundary.
+
+---
+
+## 4. Evaluations Are the Only Moat That Matters
+
+Whenever someone asks me how to improve an AI application, my first question is no longer *"What model or prompt are you using?"* It is *"Show me your evaluation dataset."*
+
+If you change a system prompt to fix a bug reported by one user, how do you know you did not silently break twelve other workflows? Without an automated eval harness, prompt engineering is just whack-a-mole.
+
+In my workflow, every production failure goes through a three-step loop:
+
+1. **Capture the trace:** Log the exact input state, tool outputs, model parameters, and final response.
+2. **Distill a deterministic check where possible:** Before reaching for an expensive "LLM-as-a-Judge", check deterministic invariants first. Did it call the expected tool? Did the output parse against the schema? Did it cite document IDs that actually existed in the retrieved context? Did it finish under 4,000 milliseconds?
+3. **Run targeted rubric grading only on the survivors:** Use a fast judge model with a binary pass/fail checklist (never vague 1-to-10 scales, which have terrible inter-run consistency).
+
+---
+
+## 5. Personal Reflection: The Shift From Prompting to Systems Engineering
+
+When I first got into AI engineering, I thought the breakthroughs in my applications would come from clever prompting techniques—chain-of-thought tricks, persona framing, or few-shot examples.
+
+Today, my perspective is almost the exact opposite. Models are improving fast enough that clever prompt hacks become obsolete every six months. What does **not** become obsolete is the engineering harness around the model:
+
+- How fast you can retrieve the right 800 tokens out of ten million.
+- How cleanly your state machine isolates failures and enforces invariants.
+- How quickly your observability pipeline turns a user thumbs-down into a reproducible regression test.
+
+The magic of AI engineering isn't in letting the model do everything. It is in knowing exactly where deterministic software ends, where probabilistic intelligence begins, and how to build a rock-solid boundary between the two.

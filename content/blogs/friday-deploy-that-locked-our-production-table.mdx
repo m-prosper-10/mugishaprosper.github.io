@@ -1,0 +1,66 @@
+---
+title: "The Friday Deploy That Locked Up Our Production Table"
+date: "2026-05-04"
+summary: "How a harmless-looking 'ALTER TABLE' migration blocked live traffic during a deploy, and how zero-downtime Expand-and-Contract migrations actually work."
+tags:
+  - "Systems Engineering"
+  - "PostgreSQL"
+  - "Backend Engineering"
+published: true
+---
+
+If you run a database migration on your local machine where a table has 200 rows, `ALTER TABLE` takes `4 milliseconds`. You never even think about what the database engine is doing under the hood while that command runs.
+
+In late April, we deployed a release that added a new column with a backfill and an index on a core table that had grown to a few million rows in production. The migration script looked completely ordinary.
+
+About ten seconds after the deployment pipeline kicked off the migration step, our health alerts lit up. Every single `SELECT` and `INSERT` touching that table in the live application froze. Within thirty seconds, incoming HTTP requests piled up behind the frozen queries, connection pools saturated, and the live service went dark for almost two minutes until the migration finished and released its lock.
+
+I spent that weekend reading the PostgreSQL locking documentation cover to cover so I would never cause a self-inflicted migration outage again.
+
+---
+
+## Why a "Fast" Lock Still Blocks Everything Behind It (The Lock Queue Trap)
+
+Here is the part of PostgreSQL locking that surprised me the most.
+
+Even when an `ALTER TABLE` statement doesn't rewrite the entire table on disk, changing a table's structure requires acquiring an **`ACCESS EXCLUSIVE` lock**—for at least a split second—to update the system catalog metadata. `ACCESS EXCLUSIVE` conflicts with *everything*, including normal `SELECT` queries.
+
+Now suppose at the exact moment your migration runs `ALTER TABLE users ...`:
+1. A slow analytics or reporting `SELECT` query is already running on `users` and will take **15 seconds** to finish.
+2. Your `ALTER TABLE` migration cannot grab its `ACCESS EXCLUSIVE` lock until that 15-second `SELECT` finishes—so the migration enters the lock queue and waits.
+3. While the `ALTER TABLE` is waiting in line at the front of the queue, **every new `SELECT`, `INSERT`, and `UPDATE` from live users queues up behind the `ALTER TABLE`!**
+
+Read that again: even an `ALTER TABLE` operation that only takes `2 milliseconds` of actual CPU work will freeze **100% of reads and writes on that table for 15 full seconds** if it gets stuck waiting behind one slow query!
+
+---
+
+## Three Rules for Zero-Downtime PostgreSQL Migrations
+
+### 1. Always Set a Short `lock_timeout` on Migrations
+Never let a migration sit in the lock queue for 15 seconds blocking live user traffic. Wrap every DDL statement with a strict `lock_timeout` of `2s`:
+
+```sql
+SET lock_timeout = '2s';
+SET statement_timeout = '10s';
+
+ALTER TABLE documents ADD COLUMN summary_status TEXT;
+```
+
+If `ALTER TABLE` cannot acquire the lock within 2 seconds, it aborts harmlessly and the migration script retries a few seconds later—rather than acting as a roadblock that freezes your entire user base.
+
+### 2. Never Create Indexes Without `CONCURRENTLY`
+A normal `CREATE INDEX idx_docs_owner ON documents (owner_id);` locks the table against all writes (`INSERT`, `UPDATE`, `DELETE`) for the entire duration of the index build. On a multi-million-row table, that can be 40 seconds where nobody can create or save a document.
+
+Using `CREATE INDEX CONCURRENTLY` tells Postgres to build the index in multiple passes without blocking concurrent writes. It takes slightly longer to finish in the background, and your users never feel a blip.
+
+### 3. The Expand-and-Contract Pattern for Breaking Changes
+The biggest mental shift is remembering that **during a rolling deployment, your new database schema and your old application containers exist at the exact same time.**
+
+If you rename a column from `full_name` to `display_name` in a migration that runs two minutes *before* the new Docker containers finish starting up, the currently running containers will crash for two full minutes with `column "full_name" does not exist`.
+
+Instead, every breaking schema change has to be split across **Expand -> Migrate -> Contract** releases:
+1. **Expand (Release 1):** Add the new nullable `display_name` column (keep `full_name` intact). Deploy code that writes to *both* columns and reads from `display_name ?? full_name`.
+2. **Backfill:** Backfill old rows in small batched updates (`LIMIT 5000` with a brief pause) so you never bloat `VACUUM` or lock the table.
+3. **Contract (Release 2):** Once 100% of running code only reads `display_name`, deploy a clean migration that drops the unused `full_name` column.
+
+It feels like extra ceremony the first time you do it. The first time you ship a major schema overhaul at 2:00 PM on a Tuesday while thousands of requests flow through with zero errors, you realize why every serious systems team works this way.
