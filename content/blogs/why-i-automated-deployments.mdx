@@ -1,0 +1,86 @@
+---
+title: "Why I Finally Automated My Deployments (After Breaking Production at Midnight)"
+date: "2024-12-03"
+summary: "How one typo during a manual SSH deployment convinced me to replace my shell commands with a 40-line GitHub Actions pipeline."
+tags:
+  - "DevOps"
+  - "CI/CD"
+  - "GitHub Actions"
+published: true
+---
+
+For two months after setting up my Linux VPS, my "deployment pipeline" was me opening a terminal window, SSH-ing into the server, `cd`-ing into the project directory, and running four commands by hand:
+
+```bash
+git pull origin main
+docker compose build
+docker compose up -d
+docker image prune -f
+```
+
+Whenever people talked about setting up CI/CD pipelines for a solo project, I rolled my eyes a little. Why spend three hours writing YAML files to automate four commands that take forty-five seconds to type?
+
+Then came a Tuesday night in late November.
+
+---
+
+## The Midnight Typo
+
+I had just pushed a small bug fix. I was tired, my internet connection was laggy, and I had two SSH tabs open in my terminal—one connected to my staging test directory, and one connected to the live service.
+
+I thought I was in the test folder. I ran a command to wipe the local volume and reset the database seed before rebuilding.
+
+About half a second after hitting `Enter`, I glanced up at the terminal prompt and realized I had just run `docker compose down -v` on the live container setup. Worse, while rushing to bring it back up, my new commit actually had a TypeScript type mismatch that I hadn't noticed locally because I hadn't run `npm run build` before pushing—only `npm run dev`.
+
+So now the old container was dead, the new container wouldn't compile, and I was frantically editing files with `nano` directly on the production server at 12:30 AM while users got `502 Bad Gateway` errors.
+
+---
+
+## Manual Deploys Fail Because Humans Skip Steps When Tired
+
+Looking back the next morning, two separate things went wrong, and both of them were 100% human error:
+
+1. **I pushed code that didn't even compile** because `next dev` / `ts-node` is forgiving about type errors in untouched files, while a production build fails strictly.
+2. **I ran destructive commands by hand over SSH** where one wrong terminal tab or one bad copy-paste can take down a running service.
+
+That afternoon I promised myself: **I am no longer allowed to SSH into the server to deploy code.**
+
+---
+
+## A Pipeline Doesn't Need to Be Complicated
+
+I used to think CI/CD meant Kubernetes, Helm charts, ArgoCD, and twelve stages of enterprise tooling. In reality, all I needed was a single `.github/workflows/deploy.yml` file with two simple jobs:
+
+1. **Verify (`check`):** On every push or pull request, spin up a clean runner, install dependencies with `npm ci`, run `npm run lint`, run the test suite, and run `npm run build`. If *any* of those fail, stop immediately. The broken code never even touches the server.
+2. **Deploy (`deploy`):** Only if step 1 passes on the `main` branch, connect to the VPS using a dedicated deploy SSH key and pull/restart the new container image cleanly.
+
+```yaml
+name: Verify and Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+```
+
+---
+
+## The Unexpected Psychological Benefit
+
+The best part of automating deployments wasn't the forty-five seconds I saved typing commands. It was how much **calmer** shipping changes became.
+
+Before, deploying felt like a small ceremony where I had to hold my breath and hope I didn't forget to set an environment variable or run a build check. Now, `git push origin main` is the entire ceremony. Three minutes later, either I get a green checkmark knowing the build is live, or I get a red notification telling me I broke a TypeScript type—while the old version keeps running untouched in production.
+
+If you are still SSH-ing into a server and running `git pull` by hand, don't wait until you run the wrong command in the wrong tab at midnight. Automate the boring part once so your tired future self can't mess it up.
