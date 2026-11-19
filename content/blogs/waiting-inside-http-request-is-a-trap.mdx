@@ -1,0 +1,76 @@
+---
+title: "Why Waiting for Users Inside an HTTP Request Is a Trap"
+date: "2025-04-21"
+summary: "How trying to generate PDFs and send emails synchronously inside a POST handler taught me why queues, background workers, and dead-letter retries exist."
+tags:
+  - "Backend Engineering"
+  - "Systems Engineering"
+  - "Queues"
+published: true
+---
+
+When you start building backends, the request-response cycle feels like the only tool you need. The browser sends a `POST` request, your server does all the work, and when every step is finished, you return `200 OK`.
+
+That model works fine when "all the work" is inserting two rows into PostgreSQL (`8ms`).
+
+It completely falls apart when "all the work" looks like an endpoint I wrote two months ago for a document processing workflow:
+
+```typescript
+// Everything jammed into a single HTTP request handler:
+app.post("/api/reports/submit", async (req, res) => {
+  const report = await db.report.create({ data: req.body });
+  const analysis = await callExternalScoringApi(report.text); // ~2.5s
+  const pdfBuffer = await renderPdfSummary(report, analysis); // ~4.0s
+  await uploadToObjectStorage(report.id, pdfBuffer);          // ~1.2s
+  await sendEmailWithAttachment(req.user.email, pdfBuffer);   // ~1.8s
+
+  return res.status(200).json({ id: report.id, status: "complete" });
+});
+```
+
+On a good day, that single HTTP request took **9.5 seconds** to return a response.
+
+On a bad day, two things happened that drove me crazy:
+
+1. **Partial failure chaos:** Step 1 (database insert), Step 2 (external API), Step 3 (PDF render), and Step 4 (S3 upload) all succeeded... and then Step 5 (the SMTP mail server) timed out after 10 seconds and threw an error. My endpoint returned `500 Internal Server Error` to the user. So the user clicked **"Submit" again**—creating a duplicate report in the database, paying for the external scoring API a second time, and rendering the PDF all over again!
+2. **Event loop and memory starvation:** When four users triggered PDF rendering at the exact same moment inside the web server process, memory spiked, garbage collection paused the Node.js event loop, and even simple `GET /health` requests started lagging.
+
+---
+
+## Separating "Acknowledge" From "Execute"
+
+The fix wasn't making the PDF generator faster or adding `try/catch` blocks around the email sender. The fix was realizing that **an HTTP web server should never do slow, fragile side effects while a user's browser connection is hanging open.**
+
+If a task takes more than a few hundred milliseconds—or talks to a flaky third-party API like an email provider, webhook, or LLM—the HTTP handler should only do two things:
+
+1. Validate the input and save the initial record in the database with `status: "PENDING"`.
+2. Push a lightweight job ID onto a durable queue (or an outbox table) and immediately return `202 Accepted` in under **30 milliseconds**.
+
+A separate background worker process pulls jobs off the queue at a controlled concurrency limit (say, 2 PDFs at a time so RAM never spikes) and updates the job status as it progresses.
+
+---
+
+## The Subtle Trap: Dual Writes Between Database and Queue
+
+Even after I introduced a Redis-backed job queue (`BullMQ`), I still hit one sneaky bug that taught me a lot about systems engineering.
+
+Look at these two lines:
+
+```typescript
+const report = await db.report.create({ data: { ...input, status: "PENDING" } });
+await reportQueue.add("process-report", { reportId: report.id });
+```
+
+Two times out of a thousand, errors happen in the tiny gap between line 1 and line 2:
+- **Case A:** You enqueue the job slightly too fast (or before a transaction commits), the Redis worker picks up `reportId` in 2 milliseconds, queries PostgreSQL, and gets `null` because the transaction hasn't finished committing yet!
+- **Case B:** The PostgreSQL commit succeeds, and then the network blips for half a second while talking to Redis. Now you have a report stuck in `status: "PENDING"` in your database forever, with no job in the queue to ever process it.
+
+The clean pattern that cured this for me is the **Transactional Outbox** (or polling unqueued `PENDING` rows): write both the `reports` row and an `outbox_jobs` row inside the **exact same PostgreSQL transaction**. Either both exist on disk, or neither exists. Then let a lightweight relay push unqueued jobs from the table into the worker queue.
+
+---
+
+## Idempotent Steps and Dead-Letter Queues
+
+Breaking work out of the HTTP cycle also gave me automatic retries with exponential backoff. If the email provider is down for thirty seconds, the user doesn't see a `500` error and doesn't have to re-submit the form. The worker simply catches the SMTP error, waits 5 seconds, 15 seconds, 45 seconds, and retries *only the email step* because the earlier steps (`analysisDone`, `pdfUrl`) were already recorded on the job state.
+
+Users don't mind waiting ten seconds for a heavy report when the UI immediately responds *"Got it—generating your PDF (Step 2 of 3)..."* What users hate is staring at a frozen button for ten seconds wondering if the site crashed.
