@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Check, CircleCheck, CircleCheckBig, Code2, ExternalLink, FolderGit2 } from "lucide-react";
+import { ArrowUpRight, Code2, FolderGit2 } from "lucide-react";
 import { contactInfo, projects } from "@/lib/data";
 import { motion } from "framer-motion";
 

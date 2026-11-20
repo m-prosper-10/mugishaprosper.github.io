@@ -19,7 +19,7 @@ function getSocialIcon(label: string) {
 
 export default function Hero() {
   return (
-    <section id="hero" className="container-minimal pt-12 sm:pt-16 pb-16 sm:pb-20">
+    <section id="hero" className="container-minimal pt-8 sm:pt-12 pb-10 sm:pb-12">
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
