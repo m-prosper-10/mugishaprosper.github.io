@@ -1,6 +1,6 @@
 "use client";
 
-import { Github, Gitlab, Mail } from "lucide-react";
+import { ArrowUpRight, Github, Gitlab, Mail } from "lucide-react";
 import { socialLinks } from "@/lib/data";
 import { motion } from "framer-motion";
 
@@ -19,33 +19,44 @@ function getSocialIcon(label: string) {
 
 export default function Hero() {
   return (
-    <section id="hero" className="container-minimal pt-8 sm:pt-12 pb-10 sm:pb-12">
+    <section
+      id="hero"
+      className="container-minimal pt-6 sm:pt-12 pb-8 sm:pb-12"
+    >
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, ease: "easeOut" }}
-        className="space-y-8"
+        className="space-y-6 sm:space-y-8"
       >
-        <div className="space-y-4">
-          <h1 className="text-5xl sm:text-7xl font-bold text-cold">
+        <div className="space-y-3 sm:space-y-4">
+          <h1 className="text-4xl sm:text-6xl lg:text-7xl font-bold text-cold">
             Mugisha Prosper
           </h1>
-          <p className="text-lg sm:text-2xl font-medium text-muted-foreground tracking-tight max-w-xl leading-relaxed">
+          <p className="text-base sm:text-xl lg:text-2xl font-medium text-muted-foreground tracking-tight max-w-xl leading-relaxed">
             AI & Software Engineer.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-8 gap-y-3 pt-2 text-[11px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-3 sm:gap-x-8 pt-1 sm:pt-2 text-[10px] sm:text-[11px] font-bold uppercase tracking-[0.18em] sm:tracking-[0.22em] text-muted-foreground">
           {socialLinks.map((link) => (
             <a
               key={link.label}
               href={link.href}
               target={link.href.startsWith("mailto:") ? undefined : "_blank"}
-              rel={link.href.startsWith("mailto:") ? undefined : "noopener noreferrer"}
+              rel={
+                link.href.startsWith("mailto:")
+                  ? undefined
+                  : "noopener noreferrer"
+              }
               className="hover:text-foreground transition-colors inline-flex items-center gap-1.5 group"
             >
               {getSocialIcon(link.label)}
               <span>{link.label}</span>
+              <ArrowUpRight
+                className="h-3 w-3 text-muted-foreground/40 group-hover:text-foreground group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all"
+                aria-hidden="true"
+              />
             </a>
           ))}
         </div>
