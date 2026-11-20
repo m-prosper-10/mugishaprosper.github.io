@@ -365,6 +365,61 @@ export default function MarkdownRenderer({ content }: { content: string }) {
       continue;
     }
 
+    // Markdown Table
+    if (
+      trimmed.startsWith("|") &&
+      i + 1 < lines.length &&
+      /^\|?[\s:-]+\|[\s|:-]*$/.test(lines[i + 1].trim())
+    ) {
+      const parseRow = (rowLine: string) =>
+        rowLine
+          .trim()
+          .replace(/^\|/, "")
+          .replace(/\|$/, "")
+          .split("|")
+          .map((cell) => cell.trim());
+
+      const headers = parseRow(trimmed);
+      i += 2; // Skip header and separator row
+      const rows: string[][] = [];
+
+      while (i < lines.length && lines[i].trim().startsWith("|")) {
+        rows.push(parseRow(lines[i]));
+        i++;
+      }
+
+      elements.push(
+        <div
+          key={`table-${keyCounter++}`}
+          className="my-6 overflow-x-auto border border-border/70"
+        >
+          <table className="w-full text-left border-collapse text-xs sm:text-sm">
+            <thead>
+              <tr className="border-b border-border/70 bg-muted/40 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                {headers.map((header, hIdx) => (
+                  <th key={hIdx} className="py-3 px-4 font-bold">
+                    {renderInline(header)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50 text-muted-foreground">
+              {rows.map((row, rIdx) => (
+                <tr key={rIdx}>
+                  {row.map((cell, cIdx) => (
+                    <td key={cIdx} className="py-3 px-4">
+                      {renderInline(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
     // Paragraph
     const paragraphLines: string[] = [];
     while (
@@ -378,6 +433,7 @@ export default function MarkdownRenderer({ content }: { content: string }) {
       !lines[i].trim().startsWith("> ") &&
       !lines[i].trim().startsWith("- ") &&
       !lines[i].trim().startsWith("* ") &&
+      !lines[i].trim().startsWith("|") &&
       !/^\d+\.\s+/.test(lines[i].trim())
     ) {
       paragraphLines.push(lines[i].trim());
