@@ -3,7 +3,8 @@ import Link from "next/link";
 import { ArrowRight, ArrowUpRight, FlaskConical, Github } from "lucide-react";
 import Header from "@/components/Header";
 import Footer from "@/components/sections/Footer";
-import { researchItems, siteConfig } from "@/lib/data";
+import { siteConfig } from "@/lib/data";
+import { getAllResearch } from "@/lib/research";
 
 export const metadata: Metadata = {
   title: `Research — ${siteConfig.name}`,
@@ -11,6 +12,8 @@ export const metadata: Metadata = {
 };
 
 export default function ResearchPage() {
+  const researchItems = getAllResearch();
+
   return (
     <div className="min-h-screen flex flex-col justify-between">
       <div>
@@ -81,9 +84,11 @@ export default function ResearchPage() {
                         </p>
                       )}
 
-                      <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
-                        {item.summary}
-                      </p>
+                      {item.summary && (
+                        <p className="text-sm sm:text-base text-muted-foreground leading-relaxed">
+                          {item.summary}
+                        </p>
+                      )}
 
                       <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
                         {item.tags.length > 0 && (
