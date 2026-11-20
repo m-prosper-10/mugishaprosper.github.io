@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { BookOpen, Compass, Github, Gitlab, Mail } from "lucide-react";
+import { BookOpen, Compass, FolderGit2, Github, Gitlab, Mail } from "lucide-react";
 import { contactInfo } from "@/lib/data";
 
 export default function Footer() {
   const currentYear = new Date().getFullYear();
 
   return (
-    <footer className="container-minimal pt-16 pb-12">
+    <footer className="container-minimal pt-10 pb-8">
       <div className="border-t border-border/70 pt-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground">
         <div className="flex items-center gap-3">
           <span>© {currentYear}</span>
@@ -23,6 +23,13 @@ export default function Footer() {
           >
             <Compass className="h-3.5 w-3.5" aria-hidden="true" />
             <span>Index</span>
+          </Link>
+          <Link
+            href="/projects"
+            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
+          >
+            <FolderGit2 className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Projects</span>
           </Link>
           <Link
             href="/blogs"
