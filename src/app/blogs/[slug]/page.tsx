@@ -70,7 +70,7 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
       <div>
         <Header />
         <main className="container-minimal pt-6 sm:pt-12 pb-8">
-          <div className="max-w-3xl">
+          <div className="max-w-full">
             <div className="mb-6 sm:mb-8">
               <Link
                 href="/blogs"
