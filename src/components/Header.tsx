@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, Compass, Terminal } from "lucide-react";
+import { BookOpen, Compass, FolderGit2, Terminal } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
 
 export default function Header() {
   const pathname = usePathname();
   const isHome = pathname === "/";
+  const isProjects = pathname.startsWith("/projects");
   const isBlogs = pathname.startsWith("/blogs");
 
   return (
@@ -35,6 +36,17 @@ export default function Header() {
           >
             <Compass className="h-3.5 w-3.5" aria-hidden="true" />
             <span>Index</span>
+          </Link>
+          <Link
+            href="/projects"
+            className={`inline-flex items-center gap-1.5 transition-colors ${
+              isProjects
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <FolderGit2 className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Projects</span>
           </Link>
           <Link
             href="/blogs"
