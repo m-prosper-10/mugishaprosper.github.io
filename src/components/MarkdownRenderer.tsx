@@ -122,7 +122,7 @@ function renderInline(text: string): ReactNode[] {
       return (
         <code
           key={idx}
-          className="px-1.5 py-0.5 text-[0.875em] font-mono bg-muted text-foreground border border-border"
+          className="px-1.5 py-0.5 text-[0.875em] font-mono bg-muted text-foreground border border-border break-words"
         >
           {token.slice(1, -1)}
         </code>
@@ -394,5 +394,5 @@ export default function MarkdownRenderer({ content }: { content: string }) {
     );
   }
 
-  return <article className="space-y-2">{elements}</article>;
+  return <article className="space-y-2 min-w-0 max-w-full">{elements}</article>;
 }

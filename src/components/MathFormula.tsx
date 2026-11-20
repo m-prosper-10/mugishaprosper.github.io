@@ -48,8 +48,8 @@ export function MathBlock({ tex }: { tex: string }) {
   }, [tex]);
 
   return (
-    <div className="my-6 py-4 px-5 border border-border bg-muted/40 overflow-x-auto text-foreground text-center">
-      <div ref={ref} className="text-sm sm:text-base">
+    <div className="my-6 py-3 sm:py-4 px-3 sm:px-5 border border-border bg-muted/40 max-w-full overflow-x-auto text-foreground text-center">
+      <div ref={ref} className="text-xs sm:text-base min-w-fit mx-auto">
         {tex}
       </div>
     </div>
