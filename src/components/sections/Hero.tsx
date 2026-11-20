@@ -21,7 +21,7 @@ export default function Hero() {
   return (
     <section
       id="hero"
-      className="container-minimal pt-6 sm:pt-12 pb-8 sm:pb-12"
+      className="container-minimal pt-4 sm:pt-12 pb-8 sm:pb-12"
     >
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -34,7 +34,7 @@ export default function Hero() {
             Mugisha Prosper
           </h1>
           <p className="text-base sm:text-xl lg:text-2xl font-medium text-muted-foreground tracking-tight max-w-xl leading-relaxed">
-            AI & Software Engineer.
+            Just an Engineer.
           </p>
         </div>
 
@@ -53,10 +53,6 @@ export default function Hero() {
             >
               {getSocialIcon(link.label)}
               <span>{link.label}</span>
-              <ArrowUpRight
-                className="h-3 w-3 text-muted-foreground/40 group-hover:text-foreground group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all"
-                aria-hidden="true"
-              />
             </a>
           ))}
         </div>

@@ -6,14 +6,14 @@ import {
   ArrowRight,
   Clock,
   Code2,
-  ExternalLink,
   FileText,
   FlaskConical,
   FolderGit2,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { projects, researchItems } from "@/lib/data";
+import { projects } from "@/lib/data";
 import type { BlogPostMeta } from "@/lib/blogs";
+import type { ResearchItemMeta } from "@/lib/research";
 
 type TabId = "projects" | "research" | "articles";
 
@@ -22,9 +22,13 @@ const TAB_ORDER: TabId[] = ["projects", "research", "articles"];
 export default function HomeTabs({
   posts,
   totalCount,
+  research,
+  totalResearchCount,
 }: {
   posts: BlogPostMeta[];
   totalCount: number;
+  research: ResearchItemMeta[];
+  totalResearchCount: number;
 }) {
   const [activeTab, setActiveTab] = useState<TabId>("projects");
 
@@ -99,12 +103,12 @@ export default function HomeTabs({
               <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Research</span>
               <span className="font-mono text-[10px] text-muted-foreground/50">
-                ({researchItems.length})
+                ({totalResearchCount})
               </span>
               {activeTab === "research" && (
                 <motion.span
                   layoutId="home-tab-underline"
-                  className="absolute inset-x-0 bottom-0 h-[2px] bg-foreground"
+                  className="absolute inset-x-0 bottom-0 h-0.5 bg-foreground"
                   transition={{ type: "spring", stiffness: 450, damping: 35 }}
                 />
               )}
@@ -157,7 +161,7 @@ export default function HomeTabs({
                 href="/research"
                 className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors group"
               >
-                <span>All Research ({researchItems.length})</span>
+                <span>All Research ({totalResearchCount})</span>
                 <ArrowRight
                   className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-foreground group-hover:translate-x-0.5 transition-all"
                   aria-hidden="true"
@@ -210,7 +214,7 @@ export default function HomeTabs({
                         {project.name}
                       </a>
                     ) : (
-                      <span className="text-lg sm:text-2xl text-foreground font-medium truncate">
+                      <span className="text-lg sm:text-xl text-foreground font-medium truncate">
                         {project.name}
                       </span>
                     )}
@@ -225,7 +229,6 @@ export default function HomeTabs({
                       className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground/50 group-hover:text-foreground transition-colors shrink-0"
                     >
                       <span>{project.status}</span>
-                      <ExternalLink className="h-3 w-3" aria-hidden="true" />
                     </a>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/35 shrink-0">
@@ -267,9 +270,9 @@ export default function HomeTabs({
             className="space-y-5"
           >
             <div className="divide-y divide-border/50 border-b border-border/50">
-              {researchItems.slice(0, 3).map((item, index) => (
+              {research.map((item, index) => (
                 <article
-                  key={item.title}
+                  key={item.slug}
                   className="py-4 sm:py-5 first:pt-2 group"
                 >
                   <div className="grid grid-cols-1 sm:grid-cols-[5.5rem_1fr] gap-1.5 sm:gap-6 items-baseline">
@@ -303,8 +306,8 @@ export default function HomeTabs({
 
             <div className="flex items-center justify-between pt-1">
               <p className="text-xs sm:text-sm text-muted-foreground">
-                Showing {Math.min(3, researchItems.length)}{" "}
-                {researchItems.length === 1
+                Showing {research.length}{" "}
+                {totalResearchCount === 1
                   ? "active research thread."
                   : "active research threads."}
               </p>
