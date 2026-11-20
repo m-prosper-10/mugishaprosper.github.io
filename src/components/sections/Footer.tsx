@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BookOpen, Compass, FolderGit2, Github, Gitlab, Mail } from "lucide-react";
+import { BookOpen, Compass, FlaskConical, FolderGit2, Github, Gitlab, Mail } from "lucide-react";
 import { contactInfo } from "@/lib/data";
 
 export default function Footer() {
@@ -9,14 +9,14 @@ export default function Footer() {
 
   return (
     <footer className="container-minimal pt-10 pb-8">
-      <div className="border-t border-border/70 pt-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground">
+      <div className="border-t border-border/70 pt-6 sm:pt-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-5 sm:gap-6 text-[10px] sm:text-[11px] font-bold uppercase tracking-[0.16em] sm:tracking-[0.2em] text-muted-foreground">
         <div className="flex items-center gap-3">
           <span>© {currentYear}</span>
           <span className="text-border">·</span>
           <span className="text-foreground/80">Mugisha Prosper</span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-6 sm:gap-8">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-3 sm:gap-x-7">
           <Link
             href="/"
             className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
@@ -30,6 +30,13 @@ export default function Footer() {
           >
             <FolderGit2 className="h-3.5 w-3.5" aria-hidden="true" />
             <span>Projects</span>
+          </Link>
+          <Link
+            href="/research"
+            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
+          >
+            <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Research</span>
           </Link>
           <Link
             href="/blogs"
