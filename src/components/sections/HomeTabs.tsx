@@ -4,7 +4,6 @@ import { useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
-  ArrowUpRight,
   Clock,
   Code2,
   ExternalLink,
@@ -12,7 +11,7 @@ import {
   FolderGit2,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { contactInfo, projects } from "@/lib/data";
+import { projects } from "@/lib/data";
 import type { BlogPostMeta } from "@/lib/blogs";
 
 type TabId = "projects" | "articles";
@@ -105,18 +104,16 @@ export default function HomeTabs({
 
           <div className="pb-3.5">
             {activeTab === "projects" ? (
-              <a
-                href={contactInfo.github}
-                target="_blank"
-                rel="noopener noreferrer"
+              <Link
+                href="/projects"
                 className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors group"
               >
-                <span>GitHub Archive</span>
-                <ArrowUpRight
-                  className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-foreground group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all"
+                <span>All Projects ({projects.length})</span>
+                <ArrowRight
+                  className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-foreground group-hover:translate-x-0.5 transition-all"
                   aria-hidden="true"
                 />
-              </a>
+              </Link>
             ) : (
               <Link
                 href="/blogs"
@@ -141,9 +138,10 @@ export default function HomeTabs({
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
+            className="space-y-5"
           >
             <ol className="divide-y divide-border/50 border-b border-border/50">
-              {projects.map((project, index) => (
+              {projects.slice(0, 3).map((project, index) => (
                 <li
                   key={project.name}
                   className="py-4 sm:py-5 first:pt-2 flex items-baseline justify-between gap-4 group"
@@ -176,18 +174,34 @@ export default function HomeTabs({
                       aria-label={`Open ${project.name}`}
                       className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground/50 group-hover:text-foreground transition-colors shrink-0"
                     >
-                      <span>Live</span>
+                      <span>{project.status}</span>
                       <ExternalLink className="h-3 w-3" aria-hidden="true" />
                     </a>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/35 shrink-0">
                       <Code2 className="h-3 w-3" aria-hidden="true" />
-                      <span>In Dev</span>
+                      <span>{project.status}</span>
                     </span>
                   )}
                 </li>
               ))}
             </ol>
+
+            <div className="flex items-center justify-between pt-1">
+              <p className="text-xs sm:text-sm text-muted-foreground">
+                Showing {Math.min(3, projects.length)} featured projects.
+              </p>
+              <Link
+                href="/projects"
+                className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.2em] text-foreground hover:underline underline-offset-6 shrink-0 ml-4 group"
+              >
+                <span>View Details</span>
+                <ArrowRight
+                  className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform"
+                  aria-hidden="true"
+                />
+              </Link>
+            </div>
           </motion.div>
         )}
 
