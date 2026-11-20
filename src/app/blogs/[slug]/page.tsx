@@ -69,21 +69,22 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
     <div className="min-h-screen flex flex-col justify-between">
       <div>
         <Header />
-        <main className="container-minimal pt-8 sm:pt-12 pb-8">
-          <div className="mb-8">
-            <Link
-              href="/blogs"
-              className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors group"
-            >
-              <ArrowLeft
-                className="h-3.5 w-3.5 group-hover:-translate-x-0.5 transition-transform"
-                aria-hidden="true"
-              />
-              <span>All Writing</span>
-            </Link>
-          </div>
+        <main className="container-minimal pt-6 sm:pt-12 pb-8">
+          <div className="max-w-3xl">
+            <div className="mb-6 sm:mb-8">
+              <Link
+                href="/blogs"
+                className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground transition-colors group"
+              >
+                <ArrowLeft
+                  className="h-3.5 w-3.5 group-hover:-translate-x-0.5 transition-transform"
+                  aria-hidden="true"
+                />
+                <span>All Writing</span>
+              </Link>
+            </div>
 
-          <header className="space-y-6 pb-10 mb-10 border-b border-border/70">
+            <header className="space-y-5 sm:space-y-6 pb-8 sm:pb-10 mb-8 sm:mb-10 border-b border-border/70">
             <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono font-bold uppercase tracking-[0.18em] text-muted-foreground/70">
               <span className="inline-flex items-center gap-1.5">
                 <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
@@ -166,6 +167,7 @@ export default async function BlogPostPage({ params }: BlogPostPageProps) {
               )}
             </nav>
           )}
+          </div>
         </main>
       </div>
       <Footer />

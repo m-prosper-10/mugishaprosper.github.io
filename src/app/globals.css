@@ -39,8 +39,9 @@
     @apply border-border;
   }
 
+  html,
   body {
-    @apply bg-background text-foreground font-sans;
+    @apply bg-background text-foreground font-sans overflow-x-clip;
   }
 
   /* Custom Scrollbar */
@@ -68,7 +69,7 @@
 
 @layer utilities {
   .container-minimal {
-    @apply w-full max-w-6xl mx-auto px-6 sm:px-8;
+    @apply w-full max-w-6xl mx-auto px-5 sm:px-8 lg:px-10;
   }
 
   .text-cold {
