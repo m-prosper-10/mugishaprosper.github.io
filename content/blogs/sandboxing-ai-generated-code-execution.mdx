@@ -1,0 +1,63 @@
+---
+title: "Why Letting an AI Agent Run Code on Your Server Is Harder Than It Looks"
+date: "2026-06-23"
+summary: "How my first attempt at a 'safe' Python execution sandbox was trivially breakable, and what it actually takes to isolate untrusted AI-generated code."
+tags:
+  - "DevSecOps"
+  - "AI Engineering"
+  - "Systems Engineering"
+published: true
+---
+
+One of the most useful things you can give an AI assistant—whether for data analysis, math verification, or coding education—is the ability to write a short Python script, run it, and inspect the output.
+
+When I first built a prototype for running AI-generated Python snippets on the backend, I knew running raw `exec()` inside the main server process was a terrible idea. So I thought I was being clever:
+
+1. I wrote a regex filter that blocked imports like `import os`, `import subprocess`, `import sys`, and `open(`.
+2. I ran the script as a child process with a 5-second timeout.
+
+I felt pretty smart for about two hours—until I decided to test if I could break out of my own filter.
+
+It took me less than three minutes to bypass my blocklist, read `/etc/passwd`, and dump the container's environment variables.
+
+---
+
+## Why Blacklisting Strings or AST Nodes in Dynamic Languages Always Fails
+
+In Python (and JavaScript), blocking words like `os` or `subprocess` with string matching or even simple AST checks is like locking the front door while leaving all the windows wide open.
+
+Even without typing the word `import` or `os`, Python lets you walk the object inheritance tree from a plain empty tuple `()` up to `object`, list all loaded subclasses in memory, grab `<class 'os._wrap_close'>`, and reach `system()` through its `__init__.__globals__` dictionary:
+
+```python
+# Look ma, no "import os"!
+[cls for cls in ().__class__.__base__.__subclasses__() if "wrap_close" in cls.__name__][0].__init__.__globals__["system"]("id")
+```
+
+Even worse, if an attacker doesn't try to steal files and just writes a two-line memory bomb (`x = "a" * (10**10)`) or a CPU fork loop, a simple `setTimeout` in Node.js won't save your server from running out of RAM and getting killed by the Linux OOM (Out-of-Memory) killer.
+
+That afternoon taught me a foundational security rule: **a language runtime is not a security boundary.** If you are executing untrusted or LLM-generated code, the isolation has to happen at the **Linux kernel or microVM level**, never inside Python or JavaScript.
+
+---
+
+## Building Real Isolation: Four Non-Negotiable Layers
+
+When I rebuilt the code execution service properly, I threw away the string regexes completely and built the sandbox around OS-level containment:
+
+### 1. Ephemeral Unprivileged Containers (`gVisor` / Rootless Sandbox)
+Every execution runs inside a disposable, unprivileged sandbox environment (`--user 65534:65534` / `nobody`) with all Linux kernel capabilities dropped (`--cap-drop=ALL`) and `--security-opt=no-new-privileges`.
+
+### 2. Zero Network Access (`--network=none`)
+Why would a math verification or algorithm grading script ever need to make outbound TCP connections to the internet? It shouldn't. Disabling the network interface entirely (`--network=none`) kills two massive threats at once:
+- The script cannot exfiltrate anything it discovers.
+- The script cannot be used to scan your internal private VPC network or hit cloud metadata endpoints (`169.254.169.254`).
+
+### 3. Hard Cgroup Limits on Memory, CPU, and Process Count (`pids-limit`)
+Before executing a single line of code, the container is constrained by strict Linux cgroups v2 budgets:
+- **RAM:** `--memory=128m --memory-swap=128m` (if the script allocates 129MB, the kernel kills *only* that container immediately without touching the host).
+- **Processes:** `--pids-limit=16` (makes fork bombs impossible).
+- **Filesystem:** `--read-only` root filesystem, with a tiny `32MB` in-memory `--tmpfs /tmp:rw,noexec,nosuid` scratch folder that evaporates the instant the run finishes.
+
+### 4. Zero Secrets in the Execution Host
+Finally, the worker service that spawns code sandboxes runs in a completely separate environment from the main API server. It has **no database credentials, no API keys, and no user session secrets** in its environment variables. Even in the worst-case scenario of a theoretical kernel escape, there are no crown jewels on that box to steal.
+
+Giving an AI agent hands to run code turns it from a chatbot into a real problem solver. Just make sure those hands are inside a blast-proof glovebox before you press run.

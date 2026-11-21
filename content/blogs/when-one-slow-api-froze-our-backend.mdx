@@ -1,0 +1,88 @@
+---
+title: "How One Slow Third-Party API Froze Our Entire Backend"
+date: "2025-11-28"
+summary: "Why default HTTP clients without explicit timeouts are ticking time bombs, and how circuit breakers and bulkheads stop cascading failures."
+tags:
+  - "Systems Engineering"
+  - "Backend Engineering"
+  - "Resilience"
+published: true
+---
+
+We tend to think about third-party service outages as binary: either the external API is up (`200 OK`), or it is down (`503 Service Unavailable` / connection refused).
+
+When an external service goes down hard and rejects connections immediately in `5ms`, your `try/catch` block catches the error in `5ms`, logs a warning, returns a fallback response, and life goes on.
+
+Late this month, I learned that **a dead dependency is harmless compared to a slow dependency.**
+
+An external metadata enrichment API that one of our non-critical routes called started having an outage. It didn't return `500` errors. Instead, it accepted the TCP connection, held it open for **45 seconds**, and then timed out.
+
+Within three minutes, our entire backend—including login, health checks, and routes that didn't even use that external API—stopped responding.
+
+---
+
+## Why Default `fetch()` Is a Footgun in Backend Services
+
+Here is a trivia question I wish someone had asked me earlier: *What is the default request timeout of standard `fetch()` in Node.js when an external server accepts the headers or TCP socket and then stalls?*
+
+**Five minutes (`300,000ms`)**—or in some environments, no overall deadline at all!
+
+Now trace what happens when your backend gets 15 requests per second, and 3 of those requests per second call a helper function that uses bare `await fetch("https://slow-partner-api.com/...")`:
+
+1. After 10 seconds, you have **30 open sockets and in-flight promises** suspended in memory.
+2. Worse, in our code, we had opened a PostgreSQL transaction *before* calling the external API so we could save the enriched result cleanly:
+
+```typescript
+// Never hold a DB transaction open across an external network call!
+await db.$transaction(async (tx) => {
+  const record = await tx.item.create({ data: input });
+  const enrichment = await fetch(`https://partner.example.com/enrich/${record.id}`);
+  await tx.item.update({ where: { id: record.id }, data: await enrichment.json() });
+});
+```
+
+Because each hanging `fetch()` call was sitting *inside* an active database transaction, it held onto a checked-out PostgreSQL connection from our pool of 20 connections for the entire 45 seconds!
+
+Within **7 seconds**, all 20 database connections in the pool were tied up waiting on a dead third-party HTTP call. When User #21 tried to log in—a query that takes `2ms` and has nothing to do with the partner API—the login route hung waiting for a free database connection from the exhausted pool.
+
+One non-critical enrichment feature had taken down the entire application.
+
+---
+
+## Three Rules I Now Enforce on Every External Call
+
+### 1. Never Hold a Database Connection Across an External Network Call
+Database transactions are for fast, local database reads and writes (`< 20ms`). If you need to call an external HTTP API, an LLM, or an object storage bucket, do the network call **outside** the transaction, or split the database state into two fast transactions (`create as PENDING` -> `call external API` -> `update to COMPLETED`).
+
+### 2. Every Outbound Call Must Have an Explicit `AbortSignal.timeout()`
+I banned raw `fetch(url)` calls in our backend codebase in favor of a thin wrapper that requires an explicit timeout budget (usually `2,500ms` to `4,000ms` for synchronous user-facing calls):
+
+```typescript
+export async function fetchWithTimeout(
+  url: string,
+  options: RequestInit & { timeoutMs?: number } = {}
+): Promise<Response> {
+  const { timeoutMs = 3000, ...init } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+```
+
+### 3. Trip a Circuit Breaker Instead of Waiting 3 Seconds on Every Request
+Even a 3-second timeout is painful if the partner API is down for an hour—why make every single user wait 3 extra seconds before failing over to the fallback?
+
+We added a simple **Circuit Breaker** state machine around external dependencies:
+- **Closed (Normal):** Requests pass through with a `3,000ms` timeout.
+- **Open (Tripped):** If 5 consecutive requests fail or time out within 30 seconds, the circuit flips **Open** for 60 seconds. While open, calls don't even hit the network—they fail fast in **`0.01ms`** and immediately return the graceful fallback.
+- **Half-Open (Probe):** After 60 seconds, let **1** test request through. If it succeeds in under 1 second, close the circuit and resume normal traffic; otherwise stay open.
+
+In distributed systems, you don't just write code for when your dependencies work. You write code so that when a dependency starts drowning, it can't grab your server by the ankle and pull you under with it.

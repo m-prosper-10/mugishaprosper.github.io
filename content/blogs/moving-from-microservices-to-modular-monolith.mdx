@@ -1,0 +1,69 @@
+---
+title: "Why We Moved Back from Microservices to a Modular Monolith"
+date: "2026-08-06"
+summary: "How splitting a small team's backend into four separate repositories slowed our feature delivery to a crawl, and how in-process module boundaries gave us the benefits without the tax."
+tags:
+  - "Systems Engineering"
+  - "Architecture"
+  - "Backend Engineering"
+published: true
+---
+
+At the beginning of the year, while planning the architecture for a new platform with a small team of three engineers, we made a decision that felt very mature on the whiteboard: we split the backend into four separate microservices.
+
+We had an `auth-service`, a `core-api-service`, an `ai-inference-service`, and a `billing-notifications-service`—each in its own repository, with its own Docker image, its own database schema, and internal HTTP/gRPC calls between them.
+
+Why did we do it? Because every conference talk from companies with 800 engineers says microservices give you independent scalability, clean domain isolation, and fault boundaries.
+
+By July—six months in—our three-person team was spending more time managing the boundaries between our four services than actually building features for users.
+
+In August, we spent a week merging three of those services back into a single **Modular Monolith**. Our deployment time dropped by 60%, our bug rate plummeted, and our velocity doubled overnight.
+
+---
+
+## The Microservice Tax When You Aren't Netflix
+
+Nobody warns you how painful distributed systems overhead is when the same three people own all four services:
+
+1. **One feature becomes four Pull Requests:** Adding a single field that flowed from user settings to the AI pipeline to billing required updating a shared TypeScript types package, publishing it, opening PRs across three repositories, and coordinating the exact order in which the three services deployed so nothing crashed in between.
+2. **Function calls turn into network failures:** Inside a single process, calling `billingModule.checkQuota(userId)` takes `0.001ms` and never fails due to a DNS hiccup. Across microservices, that exact same check becomes a serialized HTTP call with timeouts, retries, auth headers, and partial failure states.
+3. **Distributed transactions are a nightmare:** When creating an organization in `auth-service` succeeded, but initializing their workspace in `core-api-service` failed over the network, we had to write compensating rollback jobs just to keep two tables in sync—something a single PostgreSQL `BEGIN ... COMMIT` transaction gives you for free.
+
+---
+
+## The False Dichotomy: Spaghetti Monolith vs. Microservices
+
+The reason people run away from monoliths is that they picture a 100,000-line ball of mud where every controller reaches directly into every database table across the entire app.
+
+What clicked for us is that **you do not need a network boundary to enforce a module boundary.**
+
+When we consolidated into a single repository and a single deployable service, we structured the codebase as a **Modular Monolith** with strict compile-time rules:
+
+```text
+src/modules/
+├── identity/
+│   ├── index.ts          # ONLY public facade exported to other modules
+│   ├── internal/         # Private domain logic & DB queries
+├── workspace/
+│   ├── index.ts
+│   ├── internal/
+└── billing/
+    ├── index.ts
+    ├── internal/
+```
+
+We enforced two simple rules via ESLint (`eslint-plugin-boundaries`) and PostgreSQL schemas:
+1. **No module is allowed to import from another module's `internal/` folder.** If `workspace` needs billing quota info, it can *only* call functions exported by `billing/index.ts`. If someone tries to import a billing database model directly inside `workspace`, the linter fails the build immediately.
+2. **No cross-module SQL `JOIN`s** on internal tables. Each domain owns its tables exclusively.
+
+---
+
+## When Should You Actually Split a Service Out?
+
+Notice I said we merged **three** of our four services back together. We kept the Python `ai-inference-service` separate for two concrete, physical reasons:
+- It needed a completely different runtime stack and heavy ML/GPU dependencies (`PyTorch`, `ONNX`, document OCR libraries) that had no business bloating the main TypeScript API container.
+- Its CPU and memory scaling profile was completely spiky compared to lightweight CRUD requests.
+
+That became my new rule of thumb for systems architecture: **Keep everything in a well-structured modular monolith until a component has a genuinely different physical scaling requirement, hardware dependency, or security blast radius.**
+
+If you ever *do* grow to fifty engineers and need to extract the `billing/` module into its own microservice later, having already enforced clean `index.ts` facade boundaries means extracting it takes an afternoon—instead of paying the distributed systems tax for two years before you even have the traffic to justify it.

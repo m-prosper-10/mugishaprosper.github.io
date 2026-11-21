@@ -1,0 +1,115 @@
+---
+title: "nlPT 2-Preview"
+subtitle: "Lightweight Multi-Scale CNN-LSTM with Attention and Temperature Calibration for Wearable EEG-Based Mental State Classification"
+date: "2026-11-20"
+year: "2026"
+status: "Active"
+area: "Wearable EEG / BCI"
+metrics: "92.8% Acc · 1.27M Params · 22 ms Edge TPU"
+authors: "Mugisha Prosper, Asimwe Landry, Dushimire Aine, Gabriel Baziramwabo, and Awet Fesseha"
+repo: "https://github.com/neurolab-0x/nlpt.2-Preview"
+summary: "A 1.27M-parameter hybrid CNN-BiLSTM-Attention architecture with ICA preprocessing and post-hoc temperature scaling, achieving 92.8% accuracy across Relaxed, Focused, and Stressed EEG states (32 participants) and sub-100 ms edge inference."
+tags:
+  - "EEG Decoding"
+  - "CNN-LSTM"
+  - "Multi-Head Attention"
+  - "Edge AI"
+published: true
+---
+
+Electroencephalography (EEG) captures cortical electrical activity at millisecond temporal resolution, making it foundational for brain-computer interfaces (BCIs), neurofeedback, and cognitive workload monitoring. Yet raw EEG decoding in wearable settings is undermined by four core failure modes: non-stationary signal drift across sessions, low signal-to-noise ratio from muscular and ocular artifacts, complex multi-scale spatiotemporal dynamics across scalp channels, and wide inter-subject anatomical variability.
+
+**nlPT 2-Preview** addresses these limitations in a compact **1.27M-parameter** end-to-end architecture that combines multi-scale 1D convolutions, stacked bidirectional LSTMs, multi-head self-attention with additive pooling, ICA-based artifact preprocessing, and post-hoc temperature scaling for calibrated probability estimates.
+
+---
+
+## 1. Dataset & Signal Preprocessing Pipeline
+
+Continuous 32-channel EEG (256 Hz, International 10–20 montage, Cz reference, electrode impedance $< 5\text{ k}\Omega$) was recorded from **32 healthy adults** (18 men, 14 women; mean age $31.2 \pm 6.8$ years) across three counterbalanced 120-second conditions:
+
+- **Relaxed:** Eyes-closed resting state with guided mindfulness or ambient soundscapes, promoting posterior alpha oscillations (8–13 Hz).
+- **Focused:** Sustained selective attention via a modified Continuous Performance Test (CPT), engaging frontoparietal beta activity (13–30 Hz).
+- **Stressed:** Dual-stressor protocol combining time-pressured serial arithmetic with unpredictable 85 dB SPL white-noise bursts.
+
+After quality screening, the dataset yielded **96 trials** and **5,760 overlapping 4-second windows** (1,024 samples per window, 50% overlap / 2-second stride, $\Delta f = 0.25\text{ Hz}$). Every recording passed through a six-stage sequential preprocessing pipeline:
+
+1. **Average Re-referencing** across all $N = 32$ channels to reduce original Cz reference bias:
+   $$x_i^{\text{ref}}(t) = x_i(t) - \frac{1}{N} \sum_{j=1}^{N} x_j(t)$$
+2. **Bandpass Filtering:** Fourth-order zero-phase Butterworth filter ($0.5\text{–}50\text{ Hz}$).
+3. **FastICA Artifact Removal:** Automatic rejection of independent components with $\text{Kurtosis}(IC_i) > 5$ or $\text{Corr}(IC_i, \text{EOG}) > 0.9$ (removing $3.2 \pm 1.1$ components per subject on average).
+4. **Notch Filtering:** 50 Hz notch filter ($Q = 30$) to suppress power-line interference.
+5. **Channel-Wise Robust Normalization:** Median and interquartile range scaling to resist residual extreme outliers:
+   $$x_i'(t) = \frac{x_i(t) - \text{median}(x_i)}{\text{IQR}(x_i)}$$
+6. **Windowing:** 4-second epochs ($T' = 1024/4 = 256$ post-pooling steps inside the CNN encoder).
+
+---
+
+## 2. Architecture & Parameter Distribution (~1.27M)
+
+The network processes `[B, 32, 1024]` EEG windows through four sequential stages:
+
+| Component | Configuration | Parameters | Share |
+| :--- | :--- | :--- | :--- |
+| **Multi-Scale CNN Encoder** | 3 parallel branches: Conv1D (`64`, `k=16`), SeparableConv1D (`128`, `k=8`), Conv1D (`256`, `k=4`) + MaxPool(4) → `[B, 256, 448]` | 448k | 35% |
+| **Bidirectional LSTM** | 2 stacked BiLSTM layers (`128` and `64` hidden units) + Dropout (`0.3`) → `[B, 256, 128]` | 512k | 40% |
+| **Multi-Head Attention + Pooling** | 4 heads ($d_k = 64$), projection $W^O$, FFN (`128 → 256 → 128`) + LayerNorm, additive attention pooling → `[B, 128]` | 200k | 16% |
+| **Classification Head + Calibration** | Dense (`64`, ReLU) + Dropout (`0.5`) → 3-class softmax with post-hoc temperature scaling ($\tau > 0$) | 70k | 6% |
+| **Normalization & Other** | Batch normalization layers and auxiliary parameters | 40k | 3% |
+
+At inference time, logits $z_c$ are calibrated post-hoc using a scalar temperature $\tau > 0$ fitted on a held-out calibration split by minimizing negative log-likelihood:
+
+$$p_c^{\text{cal}} = \frac{\exp(z_c / \tau)}{\sum_{j=1}^{3} \exp(z_j / \tau)}$$
+
+---
+
+## 3. Experimental Evaluation & Ablation
+
+All models were evaluated using **5-fold subject-stratified cross-validation** (ensuring all 4-second epochs from a given participant remain strictly in the same fold to prevent subject and temporal leakage).
+
+| Model | Accuracy (%) | F1-Score (%) | AUC |
+| :--- | :--- | :--- | :--- |
+| SVM-RBF (Handcrafted) | 78.4 ± 2.1 | 77.8 ± 2.0 | 0.85 ± 0.02 |
+| LSTM-only | 87.6 ± 1.5 | 87.5 ± 1.4 | 0.93 ± 0.01 |
+| CNN-only | 89.2 ± 1.3 | 89.1 ± 1.3 | 0.94 ± 0.01 |
+| CNN-LSTM (No Attention) | 91.3 ± 0.9 | 91.2 ± 0.9 | 0.96 ± 0.01 |
+| **nlPT 2-Preview (Proposed)** | **92.8 ± 0.7** | **92.7 ± 0.6** | **0.97 ± 0.01** |
+
+- **Per-Class F1-Scores:** Relaxed **94.2%**, Focused **93.1%**, and Stressed **91.8%**.
+- **Leave-One-Subject-Out (LOSO):** **87.3% ± 4.2%** accuracy on unseen subjects.
+- **Confidence Calibration:** Temperature scaling reduced Expected Calibration Error (ECE) from **0.089 → 0.032**, Maximum Calibration Error (MCE) from **0.142 → 0.058**, and Brier score from **0.174 → 0.121**.
+
+### Ablation Analysis
+
+| Configuration | Accuracy (%) | Delta |
+| :--- | :--- | :--- |
+| Full model (nlPT 2-Preview) | 92.8 | — |
+| Without calibration | 92.1 | -0.7 |
+| Without attention | 91.3 | -1.5 |
+| Without multi-scale | 90.8 | -2.0 |
+| Without BiLSTM | 89.2 | -3.6 |
+| Without preprocessing | 87.1 | -5.7 |
+
+---
+
+## 4. Neurophysiological Interpretability (SHAP)
+
+SHAP feature-importance and channel contribution analyses aligned with established EEG markers:
+
+- **Stressed:** Frontal channels (`F3`, `F4`, `Fz`) accounted for **28%** of total importance, driven by elevated beta/gamma activity ($15\text{–}30\text{ Hz}$ and $>30\text{ Hz}$).
+- **Focused:** Central channels (`C3`, `C4`, `Cz`) accounted for **35%** of total importance, driven by central beta rhythms ($13\text{–}30\text{ Hz}$) and suppressed posterior alpha.
+- **Relaxed:** Occipital channels (`O1`, `O2`, `Oz`) accounted for **31%** of total importance, reflecting pronounced eyes-closed posterior alpha activity ($8\text{–}13\text{ Hz}$).
+
+---
+
+## 5. Edge Inference Benchmarks & Deployment Constraints
+
+Under **INT8 quantization**, nlPT 2-Preview retains **92.5%** accuracy (vs. 92.8% FP32) with a **1.3 MB** static flash footprint, **12 MB** peak dynamic RAM, and **0.8 W** average mobile power draw.
+
+| Hardware Platform | Runtime | Latency / 4s Window |
+| :--- | :--- | :--- |
+| Edge TPU (Coral Dev Board) | INT8 Edge TPU Compiler | **22 ± 4 ms** |
+| Desktop CPU (Intel i7-12700H) | ONNX Runtime (1 thread) | **45 ± 8 ms** |
+| Mobile CPU (Snapdragon 888) | TensorFlow Lite | **78 ± 12 ms** |
+| Raspberry Pi 4 (ARM Cortex-A72) | ONNX Runtime (1 thread) | **156 ± 24 ms** |
+
+> **Real-Time Streaming Prerequisite:** Because FastICA was executed offline across full trial recordings, the latency figures above measure standalone neural network inference per preprocessed window. End-to-end real-time wearable deployment requires pairing the network with causal online artifact suppression (such as sliding-window surface Laplacian filtering, online Artifact Subspace Reconstruction, or recursive ICA).

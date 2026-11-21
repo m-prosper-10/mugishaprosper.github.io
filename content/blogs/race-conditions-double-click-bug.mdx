@@ -1,0 +1,90 @@
+---
+title: "When Two Requests Click 'Pay' at the Exact Same Millisecond"
+date: "2025-01-19"
+summary: "How a double-click bug bypassed my 'if (balance >= amount)' check in JavaScript, and how database transactions and row locks actually solve race conditions."
+tags:
+  - "Backend Engineering"
+  - "PostgreSQL"
+  - "Concurrency"
+published: true
+---
+
+Here is a piece of backend code that almost every developer writes when building their first wallet, credits, or inventory system:
+
+```typescript
+// Looks completely fine at first glance:
+const wallet = await db.wallet.findUnique({ where: { userId } });
+
+if (!wallet || wallet.credits < cost) {
+  throw new Error("Insufficient credits");
+}
+
+await db.wallet.update({
+  where: { userId },
+  data: { credits: wallet.credits - cost },
+});
+```
+
+You read it top to bottom. First you fetch the wallet. Then you check if `wallet.credits` is at least `cost`. If not, you throw an error. Otherwise, you subtract `cost` and save the new balance. How could that possibly go wrong?
+
+Last week, while testing an AI credit-deduction endpoint I was building, a user on a slow mobile connection tapped the "Generate" button twice within 40 milliseconds.
+
+They only had `10` credits left in their account. Each generation cost `10` credits.
+
+Both requests succeeded. Both generations ran. And when I looked at the database, their credit balance after spending `20` credits out of `10` was... **`0`**. Not even `-10`. Just `0`. They got the second generation completely for free.
+
+---
+
+## Tracing the 40-Millisecond Window
+
+When you read `async/await` code, your brain naturally reads it as if nothing else in the universe happens while `await` is paused.
+
+In reality, every `await` is a pause point where Node.js yields control and processes other incoming HTTP requests while waiting for PostgreSQL to reply over the network. Here is what actually happened on the timeline:
+
+1. **0ms (Request A):** Runs `SELECT credits FROM wallets WHERE user_id = 1`. Gets back `10`.
+2. **12ms (Request B):** Arrives before Request A finishes updating! Runs `SELECT credits FROM wallets WHERE user_id = 1`. Also gets back `10`.
+3. **20ms (Request A):** Checks `if (10 < 10)` -> false. Runs `UPDATE wallets SET credits = 0 WHERE user_id = 1` (because `10 - 10 = 0`).
+4. **31ms (Request B):** Checks `if (10 < 10)` -> false! Runs `UPDATE wallets SET credits = 0 WHERE user_id = 1` (because its stale copy of `wallet.credits` in JavaScript memory was still `10`, and `10 - 10 = 0`).
+
+In computer science textbooks, they call this a **Time-of-Check to Time-of-Use (TOCTOU)** race condition and a **Lost Update**. When you meet it in your own logs, it just feels like your `if` statement lied to you.
+
+---
+
+## Why Fixing It on the Frontend Is Not a Fix
+
+The most common quick fix people suggest is: *"Just disable the button on the React frontend after the first click!"*
+
+Disabling the button stops accidental double-taps from honest users, which is great for UX. It does **nothing** to stop someone from running a five-line script that fires ten parallel `POST` requests with `Promise.all` or `curl --parallel` to drain free credits from your API.
+
+To actually fix a concurrency bug, the check and the update have to stop living in JavaScript memory and start living atomically inside the database engine.
+
+---
+
+## Three Ways the Database Solves This Properly
+
+### 1. Atomic Conditional `UPDATE` (Simplest and Fastest)
+Instead of reading the balance into JavaScript, doing subtraction in JavaScript, and writing the number back, let PostgreSQL do both the check and the decrement in a single atomic statement:
+
+```sql
+UPDATE wallets
+SET credits = credits - $1
+WHERE user_id = $2
+  AND credits >= $1
+RETURNING credits;
+```
+
+When Request A and Request B hit PostgreSQL at the exact same millisecond with that single `UPDATE`, PostgreSQL automatically acquires a row-level lock on `user_id = $2`. Request A decrements `credits` from `10` to `0` and returns `0`. Request B waits a fraction of a millisecond for Request A's lock to release, sees that `credits >= 10` is now false, updates **0 rows**, and your backend immediately returns `"Insufficient credits"`.
+
+### 2. `SELECT ... FOR UPDATE` Inside a Transaction
+When the business logic between reading and updating is too complex for a single `UPDATE` statement, wrap the read and the write in a database transaction (`BEGIN ... COMMIT`) and use `SELECT ... FOR UPDATE`. That tells Postgres: *"Lock this row until my transaction commits; make any concurrent request trying to touch this user's wallet wait in line."*
+
+### 3. A `CHECK (credits >= 0)` Constraint + Idempotency Keys
+As a final safety net, I added an explicit constraint on the table itself:
+
+```sql
+ALTER TABLE wallets ADD CONSTRAINT credits_non_negative CHECK (credits >= 0);
+```
+
+And for endpoints triggered by user clicks, the client generates a unique `Idempotency-Key` UUID per action. If a flaky mobile network retries the exact same request twice, the backend sees the duplicate key and returns the original response without running the operation a second time.
+
+Never trust an `if` statement in application memory to guard shared database state. By the time your `if` block finishes evaluating, the world in the database has already moved on.

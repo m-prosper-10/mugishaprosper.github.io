@@ -1,0 +1,67 @@
+---
+title: "Why I Stopped Trusting 'LLM-as-a-Judge' Benchmarks Blindly"
+date: "2026-10-03"
+summary: "How our automated AI evaluation suite gave a 94% pass rate to answers that real users hated, and how building an error taxonomy from real traces fixed our evals."
+tags:
+  - "AI Engineering"
+  - "Evaluations"
+  - "Machine Learning"
+published: true
+---
+
+By the middle of this year, I thought I was doing AI engineering the "right" way. Whenever we changed a prompt, swapped an embedding model, or tweaked a retrieval parameter, we didn't just eyeball three examples—we ran an automated evaluation script across 200 test questions.
+
+To grade those 200 responses automatically, we used the standard industry pattern: **LLM-as-a-Judge**. We fed the question, the retrieved context, and our assistant's answer into a strong judge model and asked it to score **Helpfulness**, **Faithfulness**, and **Clarity** on a scale from `1` to `5`.
+
+In late September, we tested a new prompt and model configuration. Our automated eval dashboard lit up green: average Helpfulness jumped from `4.2` to `4.7` (a **94% pass rate**!). We shipped it to production feeling confident.
+
+Within three days, user thumbs-down ratings and session abandonment increased by nearly 40%.
+
+How could our automated evaluation benchmark say the system was better than ever while real human users were getting frustrated and closing the tab?
+
+---
+
+## Three Biases That Make Generic LLM Judges Lie to You
+
+I printed out fifty real production transcripts where users had clicked thumbs-down, and compared them side-by-side with how our LLM-as-a-Judge script had scored those exact same responses.
+
+The judge model had given almost all of them a **`5/5`**. Seeing why was an eye-opener:
+
+1. **Verbosity and Formatting Bias:** LLM judges love long, polite, well-formatted Markdown answers with bullet points and bold headings. Our new prompt had made the assistant twice as wordy. When a user asked a quick factual question that needed a two-sentence answer, the assistant now output a 500-word essay with three subheadings. Real humans hated scrolling through the fluff; the LLM judge saw bullet points and gave it `5/5 for Clarity and Helpfulness`.
+2. **Confident Sycophancy Passes "Faithfulness":** If the user's question contained a false premise—for example, asking how a Python library function works when that function didn't actually exist in the documentation—the assistant politely hedged and invented a plausible-sounding workaround instead of bluntly saying *"That function doesn't exist in the docs."* The judge graded it as helpful!
+3. **1-to-5 Scales Are Meaningless Noise:** Ask an LLM judge to rate the exact same answer five times on a `1–5` scale, and it will flip between `3`, `4`, and `5` depending on tiny phrasing shifts. Averaging noisy 1–5 integers gives you fake precision (`4.38 vs 4.51`) that masks concrete failure modes.
+
+---
+
+## How We Rebuilt Our Eval Pipeline From Real Human Friction
+
+I threw away our generic 1-to-5 "Helpfulness / Clarity" prompts and rebuilt our evaluation process using a method grounded in actual error analysis:
+
+### Step 1: Read 100 Real Failures With Your Own Eyes First
+Before writing a single automated judge prompt, sit down and manually read 100 real production traces (especially the ones where users rephrased their question three times in a row, abandoned the session, or gave negative feedback).
+
+Group the failures into concrete, domain-specific failure buckets. In our case, 85% of real user complaints fell into just four specific categories:
+- `WALL_OF_TEXT`: Output exceeded 180 words when the user asked a direct single-concept question.
+- `GAVE_AWAY_SOLUTION`: In tutoring mode, wrote the final code answer before the student attempted a step.
+- `UNGROUNDED_CLAIM`: Cited a formula, API flag, or date not present in the retrieved source chunks.
+- `IGNORED_FALSE_PREMISE`: Failed to push back when the user's question contradicted the reference material.
+
+### Step 2: Use Deterministic Code Checks First
+Why ask an LLM judge if an answer is too verbose when `response.split(/\s+/).length > 180` checks it deterministically in `0.01ms` for **$0.00**?
+
+Every structural rule—latency budget, JSON schema validity, citation ID existence, maximum word count, absence of forbidden phrases—became a fast, deterministic TypeScript assertion in CI.
+
+### Step 3: Binary (`PASS` / `FAIL`) Defect Judges Aligned Against Human Labels
+For the semantic checks that genuinely needed an LLM judge (like `GAVE_AWAY_SOLUTION` or `UNGROUNDED_CLAIM`), we wrote separate, ultra-specific **binary (`true` / `false`) classifiers** for each defect—and we didn't deploy a judge prompt until its `true/false` decisions agreed with our manual human spreadsheet labels at least **90% of the time**.
+
+```typescript
+export interface BinaryEvalVerdict {
+  defectDetected: boolean;
+  evidenceQuote: string; // Force the judge to quote the exact offending sentence
+  reasoning: string;
+}
+```
+
+Forcing the judge to extract an exact `evidenceQuote` from the assistant's response before marking `defectDetected: true` eliminated almost all judge hallucinations.
+
+An evaluation suite isn't a vanity scoreboard to make you feel good before a deploy. If your evals can't catch the things that make real users close your app, a 94% green dashboard is worse than having no dashboard at all.

@@ -21,7 +21,7 @@ interface ThemeContextType {
 const STORAGE_KEY = "portfolio-theme";
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-function isTheme(value: string | null): value is Theme {
+function isTheme(value: string | null | undefined): value is Theme {
   return value === "light" || value === "dark" || value === "system";
 }
 

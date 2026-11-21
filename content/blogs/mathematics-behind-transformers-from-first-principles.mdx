@@ -1,0 +1,319 @@
+---
+title: "The Mathematics of the Transformer, Derived From First Principles"
+date: "2026-11-19"
+summary: "Walking through every equation inside the Transformer—from raw dot products and variance scaling up to Multi-Head Attention, Positional Encodings, and the Encoder-Decoder stack—and what the math physically means."
+tags:
+  - "AI Engineering"
+  - "Deep Learning"
+  - "Mathematics"
+published: true
+---
+
+For a long time, I used Transformers the way most software engineers use a car engine: I knew how to press the pedals (call an API, fine-tune a checkpoint, or plug in a HuggingFace pipeline), and I had seen the famous block diagram from *Attention Is All You Need* a dozen times.
+
+When I finally tried to implement a Transformer from scratch using only raw tensor multiplications—without calling `nn.MultiheadAttention` or `nn.TransformerBlock`—I realized how many small details the high-level diagrams hide. Why do we divide by $\sqrt{d_k}$ specifically instead of $d_k$? Why do we project a vector into three separate spaces ($Q, K, V$) instead of dotting token vectors with themselves? How can a sum of sines and cosines represent relative word distance linearly?
+
+Today I want to write down the exact derivation I wish I had when I first opened that paper—starting from a plain list of words and building every equation of the Transformer up from first principles, explaining what each matrix and symbol actually represents.
+
+---
+
+## 1. From Discrete Words to a Continuous Matrix ($X$)
+
+Computers cannot multiply words; they multiply numbers. Given an input sequence of $n$ tokens (words or sub-words) from a vocabulary of size $|V|$, we first map each token index to a learned vector of dimension $d_{\text{model}}$ using an embedding lookup table $E \in \mathbb{R}^{|V| \times d_{\text{model}}}$.
+
+Stacking the $n$ token vectors row by row gives us our starting sequence matrix $X$:
+
+$$
+X = \begin{bmatrix} x_1^T \\ x_2^T \\ \vdots \\ x_n^T \end{bmatrix} \in \mathbb{R}^{n \times d_{\text{model}}}
+$$
+
+Here is the fundamental problem of language modeling: **a static embedding row $x_i$ has the exact same numbers regardless of the sentence it appears in.** The word *"bank"* starts with the exact same vector whether the sentence is *"river bank"* or *"central bank"*.
+
+We need a mathematical operation that takes the matrix $X$ and produces a new matrix $Z \in \mathbb{R}^{n \times d_{\text{model}}}$ where each row $z_i$ is a **context-enriched vector**—a blend of word $i$ and the relevant words around it.
+
+---
+
+## 2. Positional Encoding: Teaching Order to a Set Operation
+
+Before we mix tokens together, we hit a quirk of pure matrix multiplication: **it has no sense of word order.** If you swap row 2 and row 5 of $X$, a pairwise dot-product layer simply swaps row 2 and row 5 of the output. Without position markers, *"The dog bit the man"* and *"The man bit the dog"* look identical to an attention layer.
+
+Rather than adding extra columns (which would bloat the model dimension), we **add** a positional vector $PE_{(pos)} \in \mathbb{R}^{d_{\text{model}}}$ of the exact same shape directly onto each token embedding $x_{pos}$:
+
+$$
+\tilde{x}_{pos} = x_{pos} + PE_{(pos)}
+$$
+
+In the original Transformer, $PE$ is defined deterministically using pairs of sine and cosine waves of geometrically increasing wavelengths across the dimension index $i \in \{0, 1, \dots, d_{\text{model}}/2 - 1\}$:
+
+$$
+PE_{(pos,\, 2i)} = \sin\!\left(\frac{pos}{10000^{\frac{2i}{d_{\text{model}}}}}\right), \qquad PE_{(pos,\, 2i+1)} = \cos\!\left(\frac{pos}{10000^{\frac{2i}{d_{\text{model}}}}}\right)
+$$
+
+### Why Sines and Cosines? (The Linear Offset Property)
+
+Why not just pass the integer $pos \in \{1, 2, 3, \dots\}$? Because raw integers grow unbounded for long sequences and ruin gradient stability. Why not normalize $pos / n$? Because then the step size $\Delta$ between two adjacent words changes depending on whether the sentence is 5 words long or 500 words long!
+
+Trigonometric pairs solve both problems at once. For any fixed frequency $\omega_i = 1 / 10000^{2i / d_{\text{model}}}$, recall the angle-addition identities $\sin(\alpha + \beta) = \sin\alpha\cos\beta + \cos\alpha\sin\beta$ and $\cos(\alpha + \beta) = \cos\alpha\cos\beta - \sin\alpha\sin\beta$. We can write a position $pos + k$ (a word $k$ steps ahead) as a pure **2D rotation matrix** applied to position $pos$:
+
+$$
+\begin{bmatrix} \sin(\omega_i (pos + k)) \\ \cos(\omega_i (pos + k)) \end{bmatrix} = \begin{bmatrix} \cos(\omega_i k) & \sin(\omega_i k) \\ -\sin(\omega_i k) & \cos(\omega_i k) \end{bmatrix} \begin{bmatrix} \sin(\omega_i pos) \\ \cos(\omega_i pos) \end{bmatrix}
+$$
+
+Look closely at that $2 \times 2$ rotation matrix in the middle: **it depends only on the relative offset $k$, not on the absolute position $pos$!** Because attention layers apply linear projections ($W_Q, W_K$), the model can easily learn a linear transformation that looks specifically *"3 words to the left"* ($k = -3$) regardless of where in the paragraph the phrase occurs. (Modern LLMs extend this exact rotation idea directly into the attention dot product via **RoPE**—Rotary Position Embeddings.)
+
+---
+
+## 3. Building Self-Attention From First Principles
+
+### Step 3.1: Why Naive Dot Products ($X X^T$) Are Not Enough
+
+Suppose we want each word $i$ to decide how much to pay attention to word $j$. The simplest measure of similarity between two vectors is their dot product: $x_i \cdot x_j = \|x_i\| \|x_j\| \cos\theta$.
+
+Why don't we just compute $X X^T$ directly? Three reasons:
+
+1. **Asymmetry:** In language, relevance is not symmetric. How much the pronoun *"it"* needs to attend to the noun *"server"* is different from how much *"server"* needs to attend to *"it"*. Yet a direct dot product is always symmetric: $x_i \cdot x_j = x_j \cdot x_i$.
+2. **No learned subspaces:** Raw embeddings contain everything at once—syntax, part of speech, semantic meaning, and position. We want the model to learn *what to search for* separately from *what content to hand over*.
+3. **Mixing Address with Payload:** The vector feature used to match two tokens shouldn't have to be the exact same vector that gets summed into the next layer.
+
+### Step 3.2: Queries ($Q$), Keys ($K$), and Values ($V$)
+
+To break that symmetry, we borrow a concept from database retrieval and project our input matrix $X \in \mathbb{R}^{n \times d_{\text{model}}}$ through three distinct, learnable weight matrices:
+
+$$
+Q = X W_Q, \qquad K = X W_K, \qquad V = X W_V
+$$
+
+where $W_Q \in \mathbb{R}^{d_{\text{model}} \times d_k}$, $W_K \in \mathbb{R}^{d_{\text{model}} \times d_k}$, and $W_V \in \mathbb{R}^{d_{\text{model}} \times d_v}$.
+
+Here is what each matrix physically represents for token $i$:
+- **Query ($q_i \in \mathbb{R}^{d_k}$):** What token $i$ is **looking for** (*"I am a verb; I am looking for the subject noun that performed me"*).
+- **Key ($k_j \in \mathbb{R}^{d_k}$):** The **label** token $j$ advertises to other tokens (*"I am an animate singular noun at the start of the clause"*).
+- **Value ($v_j \in \mathbb{R}^{d_v}$):** The actual **information payload** token $j$ passes along once it is selected.
+
+Now, the raw compatibility score $s_{ij}$ between token $i$'s search query and token $j$'s advertised key is their dot product, or across all tokens at once, the $n \times n$ matrix product $Q K^T$:
+
+$$
+S = Q K^T \in \mathbb{R}^{n \times n}, \qquad s_{ij} = q_i \cdot k_j = \sum_{m=1}^{d_k} q_{im} k_{jm}
+$$
+
+---
+
+### Step 3.3: Why Do We Divide by $\sqrt{d_k}$? (The Variance Proof)
+
+This was the equation that felt the most arbitrary to me until I worked through the probability math. Why divide $Q K^T$ by $\sqrt{d_k}$ before applying $\text{softmax}$?
+
+Suppose the individual components of a query vector $q$ and a key vector $k$ are independent random variables with mean $0$ and unit variance ($\mu = 0, \sigma^2 = 1$).
+
+What are the mean and variance of their dot product $s = \sum_{m=1}^{d_k} q_m k_m$?
+
+For each product term $q_m k_m$, since $q_m$ and $k_m$ are independent:
+
+$$
+\mathbb{E}[q_m k_m] = \mathbb{E}[q_m]\mathbb{E}[k_m] = 0
+$$
+
+$$
+\text{Var}(q_m k_m) = \mathbb{E}[q_m^2]\mathbb{E}[k_m^2] - (\mathbb{E}[q_m k_m])^2 = 1 \cdot 1 - 0 = 1
+$$
+
+Now sum $d_k$ of those independent terms together. By linearity of variance across independent variables:
+
+$$
+\text{Var}\!\left(\sum_{m=1}^{d_k} q_m k_m\right) = \sum_{m=1}^{d_k} \text{Var}(q_m k_m) = d_k \implies \sigma = \sqrt{d_k}
+$$
+
+**The standard deviation of the dot product grows as $\sqrt{d_k}$!** If $d_k = 64$, the dot products have a standard deviation of $8$—meaning scores routinely swing between $-20$ and $+20$.
+
+What happens when you feed numbers like $[20, -5, 2]$ into the $\text{softmax}$ function?
+
+$$
+\text{softmax}(z)_j = \frac{e^{z_j}}{\sum_{r=1}^{n} e^{z_r}}
+$$
+
+Because $e^{20} \approx 4.85 \times 10^8$, the largest element absorbs $99.999999\%$ of the probability mass (`1.0`), and every other token gets `0.0`. And what is the derivative (Jacobian) of $\text{softmax}$ when one output is `1.0` and the rest are `0.0`?
+
+$$
+\frac{\partial a_j}{\partial z_r} = a_j (\delta_{jr} - a_r) \approx 0
+$$
+
+**The gradients vanish completely**, and the model stops learning!
+
+By dividing the dot product by $\sqrt{d_k}$, we rescale its variance back to exactly $1$, regardless of how wide the hidden dimension $d_k$ is:
+
+$$
+\text{Var}\!\left(\frac{q \cdot k}{\sqrt{d_k}}\right) = \frac{1}{(\sqrt{d_k})^2} \cdot \text{Var}(q \cdot k) = \frac{d_k}{d_k} = 1
+$$
+
+Putting the scaling, softmax normalization, and weighted sum of values ($V$) together gives the complete **Scaled Dot-Product Attention** equation:
+
+$$
+\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{Q K^T}{\sqrt{d_k}}\right) V
+$$
+
+Notice what the output is: $\text{softmax}(\dots)$ produces an $n \times n$ row-stochastic matrix $A$ where every row sums to $1$. Multiplying $A \in \mathbb{R}^{n \times n}$ by $V \in \mathbb{R}^{n \times d_v}$ computes a **convex combination (weighted average)** of all value vectors in the sequence for each token position.
+
+---
+
+## 4. Multi-Head Attention (MHA): Attending to Multiple Subspaces at Once
+
+A single attention operation has a bottleneck: because $\text{softmax}$ forces all weights in a row to sum to $1$, a single attention head tends to get dominated by one primary relationship.
+
+Consider the sentence:
+> *"The engineer fixed the bug in the router because **it** was dropping packets."*
+
+To understand the word **"it"** fully, you simultaneously need to resolve:
+1. **Coreference / Semantics:** What noun does *"it"* refer to? (*"router"*, not *"bug"* or *"engineer"*).
+2. **Syntax / Grammar:** What verb is *"it"* the subject of? (*"was dropping"*).
+3. **Local Context:** What conjunction introduced this clause? (*"because"*).
+
+If we only have one set of $(Q, K, V)$, all three questions have to fight over a single probability distribution.
+
+**Multi-Head Attention** solves this by splitting the $d_{\text{model}}$-dimensional space into $h$ parallel low-dimensional subspaces ("heads"), where each head has dimension $d_k = d_v = d_{\text{model}} / h$:
+
+$$
+\text{head}_i = \text{Attention}\!\left(X W_i^Q,\, X W_i^K,\, X W_i^V\right), \qquad i \in \{1, \dots, h\}
+$$
+
+where $W_i^Q, W_i^K \in \mathbb{R}^{d_{\text{model}} \times d_k}$ and $W_i^V \in \mathbb{R}^{d_{\text{model}} \times d_v}$.
+
+Each head produces an output matrix in $\mathbb{R}^{n \times d_v}$. We concatenate all $h$ heads side-by-side back into an $n \times (h \cdot d_v) = n \times d_{\text{model}}$ matrix, and mix their insights together through a final output projection matrix $W^O \in \mathbb{R}^{d_{\text{model}} \times d_{\text{model}}}$:
+
+$$
+\text{MHA}(X) = \text{Concat}\!\left(\text{head}_1,\, \text{head}_2,\, \dots,\, \text{head}_h\right) W^O
+$$
+
+Here is the coolest efficiency fact about Multi-Head Attention: **splitting into $h$ heads costs zero extra FLOPs compared to a single full-width head!** Because $h \times d_k = d_{\text{model}}$, performing $h$ matrix multiplications of size $d_{\text{model}} \times (d_{\text{model}}/h)$ has the exact same parameter count and computational complexity as one multiplication of size $d_{\text{model}} \times d_{\text{model}}$. You get $h$ distinct attention perspectives for the price of one.
+
+---
+
+## 5. Why Attention Alone Collapses: The Feed-Forward Network (FFN), Residuals, and LayerNorm
+
+A question I asked myself when first studying this was: *"If Multi-Head Attention is so powerful, why couldn't we just stack 12 Multi-Head Attention layers on top of each other with nothing in between?"*
+
+Look back at the attention equation: for a fixed attention matrix $A$, the output for a head is $A (X W_V) W_O$.
+
+In linear algebra, the product of three linear transformations $A$, $W_V$, and $W_O$ with no element-wise non-linearity in between is **still just a single linear transformation** of $X$! Without a non-linear function between tokens' feature channels, stacking deep layers adds very little expressive power.
+
+### 5.1 Position-Wise Feed-Forward Network (FFN)
+
+While Self-Attention mixes information **across sequence positions** (token-to-token communication), the Position-Wise Feed-Forward Network acts **independently on each token vector $z_i$** to process and transform what that token just gathered.
+
+It expands the token vector from $d_{\text{model}}$ to a wider intermediate dimension $d_{ff}$ (typically $4 \times d_{\text{model}}$), applies a non-linear activation $\phi$ (originally $\text{ReLU}$, and in modern LLMs $\text{GELU}$ or $\text{SwiGLU}$), and projects back down to $d_{\text{model}}$:
+
+$$
+\text{FFN}(z_i) = \max\!\left(0,\, z_i W_1 + b_1\right) W_2 + b_2
+$$
+
+Think of each Transformer block as a two-beat rhythm:
+1. **Communication (MHA):** Tokens look around the sentence and gather context from other tokens.
+2. **Computation (FFN):** Each token sits alone and non-linearly thinks about the context it just collected.
+
+### 5.2 Residual Connections ($x + \text{Sublayer}(x)$) and Layer Normalization
+
+To stack dozens of these blocks without gradients vanishing to zero during backpropagation, every sublayer (both MHA and FFN) is wrapped in a **Residual Skip Connection** and **Layer Normalization**:
+
+$$
+h_{\text{mid}} = \text{LayerNorm}\!\left(X + \text{MHA}(X)\right)
+$$
+
+$$
+h_{\text{out}} = \text{LayerNorm}\!\left(h_{\text{mid}} + \text{FFN}(h_{\text{mid}})\right)
+$$
+
+Why does the simple `+` sign in $X + F(X)$ rescue deep networks? By the chain rule of calculus, the gradient of the block output with respect to its input $X$ is:
+
+$$
+\frac{\partial (X + F(X))}{\partial X} = I + \frac{\partial F(X)}{\partial X}
+$$
+
+That identity matrix $I$ acts as an **unbroken gradient superhighway**: even if the weights inside $F(X)$ start out tiny or saturate, the gradient signal can flow backward directly through the $I$ term all the way from Layer 32 to Layer 1 unhindered.
+
+Meanwhile, **LayerNorm** standardizes each individual token vector $x \in \mathbb{R}^{d_{\text{model}}}$ across its $d_{\text{model}}$ features so activations never explode across layers:
+
+$$
+\text{LayerNorm}(x) = \gamma \odot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta
+$$
+
+where $\mu = \frac{1}{d}\sum_{k=1}^d x_k$, $\sigma^2 = \frac{1}{d}\sum_{k=1}^d (x_k - \mu)^2$, and $\gamma, \beta \in \mathbb{R}^{d_{\text{model}}}$ are learned gain and bias parameters.
+
+---
+
+## 6. The Encoder vs. The Decoder: Causal Masking and Cross-Attention
+
+Now we have all the building blocks to understand the full **Encoder-Decoder** architecture—and why models like BERT (Encoder-only), GPT/Llama/Claude (Decoder-only), and T5/Whisper (Encoder-Decoder) differ by just two mathematical tweaks.
+
+```text
+ENCODER BLOCK (Bidirectional)          DECODER BLOCK (Autoregressive)
+┌───────────────────────────┐          ┌───────────────────────────────────┐
+│  Position-Wise FFN        │          │  Position-Wise FFN                │
+│           ↑               │          │                 ↑                 │
+│  Multi-Head Self-Attn     │ ──(K,V)─►│  Multi-Head Cross-Attn (Q=Dec)    │
+│  (Full n × n visibility)  │          │                 ↑                 │
+└───────────────────────────┘          │  Masked Multi-Head Self-Attn      │
+                                       │  (Lower-triangular causal mask M) │
+                                       └───────────────────────────────────┘
+```
+
+### 6.1 The Encoder: Full Bidirectional Visibility
+In an Encoder stack, every token is allowed to attend to every other token before and after it. The attention matrix $Q K^T$ is completely unmasked. After $N$ layers, the Encoder outputs a rich memory matrix $H_{\text{enc}} \in \mathbb{R}^{n_{\text{src}} \times d_{\text{model}}}$.
+
+### 6.2 The Decoder Step 1: Causal Masking (Stopping Time Travel)
+A Decoder generates text **autoregressively**—one token at a time, predicting token $t$ given only the previous tokens $1, \dots, t-1$.
+
+During training, however, we feed the entire target sentence into the Decoder in parallel for speed. If token 3 were allowed to attend to token 4 during training, the model would just cheat by copying the next word from the future instead of learning to predict it!
+
+To prevent time travel while keeping everything a single fast matrix multiplication, we add a **Causal Mask matrix $M \in \mathbb{R}^{n \times n}$** directly to the scaled dot products *before* the $\text{softmax}$:
+
+$$
+\text{MaskedAttention}(Q, K, V) = \text{softmax}\!\left(\frac{Q K^T}{\sqrt{d_k}} + M\right) V
+$$
+
+where $M$ has zeros on and below the main diagonal, and $-\infty$ everywhere above the diagonal (where $j > i$, meaning "future tokens"):
+
+$$
+M_{ij} = \begin{cases} 0 & \text{if } j \le i \quad (\text{past and present}) \\ -\infty & \text{if } j > i \quad (\text{future}) \end{cases}
+$$
+
+Why add $-\infty$ before $\text{softmax}$ instead of multiplying by $0$ after $\text{softmax}$?
+1. Inside $\text{softmax}$, $e^{-\infty} = 0$, so future positions receive **exact zero probability**.
+2. The remaining past positions $j \le i$ still automatically normalize so their probabilities sum to exactly $1.0$!
+
+### 6.3 The Decoder Step 2: Cross-Attention (Bridging Encoder and Decoder)
+In sequence-to-sequence tasks (like translating French to English, or transcribing audio spectrograms into text in Whisper), the Decoder has a middle sublayer called **Cross-Attention**.
+
+In Cross-Attention, the **Queries ($Q$)** come from the Decoder's own current hidden states $H_{\text{dec}}$, while the **Keys ($K$)** and **Values ($V$)** come from the Encoder's final output $H_{\text{enc}}$:
+
+$$
+Q = H_{\text{dec}} W_Q, \qquad K = H_{\text{enc}} W_K, \qquad V = H_{\text{enc}} W_V
+$$
+
+Physically, this means the Decoder asks the questions ($Q$: *"I just generated the English word 'The'; what French noun in the source sentence should I translate next?"*), and the Encoder provides the searchable dictionary ($K, V$) of the source input.
+
+### 6.4 The Final Prediction Head and Cross-Entropy Loss
+At the very top of the Decoder, the final hidden vector $h_t \in \mathbb{R}^{d_{\text{model}}}$ at step $t$ is projected back to the vocabulary size $|V|$ and turned into a probability distribution over the next word:
+
+$$
+P(w_{t+1} \mid w_{1:t}) = \text{softmax}\!\left(h_t W_{\text{vocab}}\right) \in \mathbb{R}^{|V|}
+$$
+
+During training, we simply maximize the log-probability assigned to the true next token $y_{t+1}$ (Cross-Entropy Loss):
+
+$$
+\mathcal{L}(\theta) = -\sum_{t=1}^{T} \log P_\theta\!\left(y_{t+1} \mid y_1, \dots, y_t\right)
+$$
+
+---
+
+## Personal Reflection: Why Writing Out the Math Changes How You Engineer AI
+
+When you only look at a Transformer as a mysterious black box that takes a prompt and outputs text, its quirks in production feel random:
+- Why does a model lose track of instructions buried in the middle of a 50,000-token prompt?
+- Why does latency scale quadratically with prompt length during prefill?
+- Why does KV-caching consume so many gigabytes of GPU VRAM on long conversations?
+
+The moment you have the equations in your head, none of those behaviors are mysterious anymore:
+- You see the $\text{softmax}$ denominator $\sum_{r=1}^n e^{z_r}$ growing as $n$ increases, forcing attention weights to spread thinner across thousands of distractor tokens (**attention dilution**).
+- You see the $Q K^T \in \mathbb{R}^{n \times n}$ matrix requiring $O(n^2)$ pairwise dot products during prompt prefill.
+- You see why autoregressive decoding has to cache past Key ($K$) and Value ($V$) tensors across all $L$ layers and $h$ heads so step $t+1$ only computes a single query row $q_{t+1} K_{1:t+1}^T$ instead of recomputing the entire triangle from scratch.
+
+Everything that looks like "AI magic" from thirty thousand feet is, at the bottom, remarkably clean linear algebra: rotations for position, inner products for relevance, variance scaling for healthy gradients, and convex combinations of vectors. And once you can see the matrices moving, you stop guessing and start engineering.

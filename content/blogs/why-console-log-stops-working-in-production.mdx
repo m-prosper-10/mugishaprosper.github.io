@@ -1,0 +1,85 @@
+---
+title: "Why 'console.log' Stops Working Once Real Users Show Up"
+date: "2025-07-14"
+summary: "Debugging a production failure where the logs made no sense because ten concurrent users were interleaved, and how request correlation IDs fixed my visibility."
+tags:
+  - "Systems Engineering"
+  - "Backend Engineering"
+  - "Observability"
+published: true
+---
+
+When you are developing on your laptop, `console.log("user:", userId)` is the fastest debugger in the world. Why? Because there is only one request happening at a time—yours. The four lines printed in your terminal belong to the exact button you just clicked two seconds ago.
+
+In early July, a user emailed me saying they got an error screen while uploading a file on one of my apps. I SSH'd in, pulled the container logs from that five-minute window, and saw this:
+
+```text
+Starting file upload validation...
+Starting file upload validation...
+User tier verified: FREE
+Chunking document into segments...
+User tier verified: PRO
+Error: Document exceeds maximum page limit for tier
+Upload complete: 42 chunks stored.
+```
+
+Wait. Which user got the error? Was it the `FREE` user or the `PRO` user? Which document failed? Because three people had uploaded files during the same two-second window, their `console.log` lines were shuffled together like a deck of cards. I had log lines, I had an error message, and I had zero idea what actually happened.
+
+---
+
+## Text Logs Are for Humans Reading One Request; Structured Logs Are for Systems
+
+That evening I ripped out raw `console.log` calls from my backend and replaced them with **structured JSON logging** paired with a **Request Correlation ID**.
+
+The idea is simple: the moment an HTTP request crosses the threshold into your server (at the very first middleware or reverse proxy), generate a unique ID (`reqId = crypto.randomUUID()`) or read `X-Request-Id`, attach it to the request context, and return it in the response header.
+
+Even better, using Node's built-in `AsyncLocalStorage`, you don't even have to pass `reqId` down as a function argument through twenty helper functions. Every log statement anywhere in that async call tree automatically stamps itself with the current request's `reqId`, `userId`, and elapsed time:
+
+```typescript
+import { AsyncLocalStorage } from "node:async_hooks";
+
+interface LogContext {
+  requestId: string;
+  userId?: string;
+  path: string;
+}
+
+export const requestContext = new AsyncLocalStorage<LogContext>();
+
+export function logInfo(event: string, meta: Record<string, unknown> = {}) {
+  const ctx = requestContext.getStore();
+  console.log(
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "INFO",
+      event,
+      ...ctx,
+      ...meta,
+    })
+  );
+}
+```
+
+Now, instead of unsearchable strings, every line in stdout is a self-contained JSON record:
+
+```json
+{"timestamp":"2025-07-14T09:12:04.118Z","level":"ERROR","event":"upload_failed","requestId":"req_91a8f2","userId":"usr_402","reason":"max_pages_exceeded","pageCount":84,"tierLimit":50}
+```
+
+When a user sees an error banner in the UI, the banner says: `Upload failed (Ref: req_91a8f2)`. One `grep req_91a8f2` gives me the exact timeline of that single request—from initial auth check to database query to failure—completely isolated from the fifty other requests running at the same second.
+
+---
+
+## Stop Measuring Average Latency; It Hides Your Unhappiest Users
+
+The second mistake I was making with observability was looking at **average response time**.
+
+Suppose 95 requests hit cached data and finish in `20ms`, while 5 requests hit an unindexed query or cold LLM fallback and take `6,000ms` (6 seconds). What is the average response time across those 100 requests?
+
+**`319ms`.**
+
+If you look at a dashboard showing `"Average Latency: 319ms"`, you pat yourself on the back and go home. Meanwhile, 1 out of every 20 clicks on your site takes six full seconds!
+
+Once I started logging `durationMs` on every request and checking **`p95` and `p99` (tail latency)** instead of averages, I immediately found two endpoints that were fast for new users with 3 rows of data, and painfully slow for our most active power users who had accumulated 2,000 rows.
+
+Your power users are always living in your `p99` tail latency. If you only watch the average, you are optimizing for empty accounts while your best users suffer in silence.
